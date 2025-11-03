@@ -1,0 +1,28 @@
+[program:frpc]
+command=%(here)s/../frp_0.48.0_linux_amd64/frpc -c %(here)s/../frp_0.48.0_linux_amd64/frpc.ini
+autostart=true
+autorestart=true
+priority=10
+user=root
+redirect_stderr=true
+stopasgroup=true
+killasgroup=true
+startretries=99999
+stdout_logfile=%(here)s/../log/%(program_name)s.std
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+
+
+[program:web-convert]
+command=%(here)s/../bin/python3  %(here)s/../model-convert/rest_convert.py
+autostart=true
+autorestart=true
+priority=10
+user=root
+redirect_stderr=true
+stopasgroup=true
+killasgroup=true
+startretries=99999
+stdout_logfile=%(here)s/../log/%(program_name)s.std
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=5

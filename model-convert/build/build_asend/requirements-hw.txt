@@ -1,0 +1,15 @@
+decorator==4.4.0
+sympy==1.5.1
+cffi==2.0.0
+protobuf==3.13.0
+attrs
+pyyaml
+pathlib2
+scipy
+requests
+psutil
+absl-py
+onnx
+opencv-python==4.12.0.88
+# atc 工具需要低版本 numpy
+numpy==1.24.0

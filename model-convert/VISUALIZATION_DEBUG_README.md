@@ -94,16 +94,17 @@ python test/test_predict_onnx.py \
 ## 代码集成
 
 ### 在predict_onnx.py中使用
+
 ```python
-from predict_onnx import draw_detection_results
+from predict.predict_onnx import draw_detection_results
 
 # 进行推理
 results = predictor.predict("image.jpg")
 
 # 生成可视化
 output_path = draw_detection_results(
-    "image.jpg", 
-    results, 
+    "image.jpg",
+    results,
     output_path="result_with_boxes.jpg",
     conf_threshold=0.5
 )

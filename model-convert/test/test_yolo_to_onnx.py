@@ -2,13 +2,13 @@ import logging
 import os
 import sys
 import unittest
-import shutil
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入要测试的模块
-from yolo_to_onnx import convert_yolo11_to_onnx, verify_onnx_model
+from convert.yolo_to_onnx import convert_yolo11_to_onnx
+
 
 class TestYOLOToONNX(unittest.TestCase):
     

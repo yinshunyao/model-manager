@@ -1,0 +1,3 @@
+fastapi
+uvicorn
+minio==7.2.18

@@ -68,8 +68,9 @@ results.append({
 ## 使用方法
 
 ### 1. 转换模型时保留类别名称
+
 ```python
-from yolo_to_onnx import convert_yolo11_to_onnx
+from convert.yolo_to_onnx import convert_yolo11_to_onnx
 
 # 转换模型，自动保留类别名称
 onnx_path = convert_yolo11_to_onnx(
@@ -79,8 +80,9 @@ onnx_path = convert_yolo11_to_onnx(
 ```
 
 ### 2. 使用ONNX模型推理
+
 ```python
-from predict_onnx import ONNXPredictor
+from predict.predict_onnx import ONNXPredictor
 
 # 创建推理器，自动加载类别名称
 predictor = ONNXPredictor("model.onnx")

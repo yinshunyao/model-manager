@@ -1,0 +1,109 @@
+# 模型转换服务主配置文件
+
+# MinIO存储配置
+minio:
+  # MinIO服务器地址
+  endpoint: "8.137.18.24:9000"
+  # 访问密钥
+  access_key: "minio"
+  # 密钥
+  secret_key: "minio028"
+  # 是否使用SSL
+  secure: false
+  # 桶名称
+  bucket_name: "model-storage"
+  # 模型存储路径前缀
+  model_prefix: "models/"
+  # 上传超时时间（秒）
+  upload_timeout: 300
+
+# MySQL数据库配置
+mysql:
+  # 数据库连接地址
+  host: "localhost"
+  # 数据库端口
+  port: 3306
+  # 数据库用户名
+  user: "root"
+  # 数据库密码
+  password: "password"
+  # 数据库名称
+  dbname: "model_manager"
+  # 连接池大小
+  pool_size: 10
+  # 连接超时时间（秒）
+  connect_timeout: 10
+  # 字符集
+  charset: "utf8mb4"
+  # 是否自动提交事务
+  autocommit: true
+
+# 服务器配置
+server:
+  # REST API服务器地址
+  host: "0.0.0.0"
+  # REST API服务器端口
+  port: 8000
+  # 是否启用调试模式
+  debug: true
+  # 最大请求体大小（MB）
+  max_request_size: 100
+  # 请求超时时间（秒）
+  request_timeout: 300
+  # 响应格式
+  response_format: "json"
+
+# 华为昇腾配置
+ascend:
+  # 目标芯片版本
+  soc_version: "Ascend910B"
+  # 精度模式
+  precision_mode: "allow_fp32_to_fp16"
+  # ATC工具路径
+  atc_path: "/usr/local/Ascend/ascend-toolkit/latest/atc/bin/atc"
+  # 日志级别
+  log_level: "error"
+
+# 瑞芯微配置（预留）
+rockchip:
+  # 是否启用
+  enabled: false
+  # 工具路径
+  tool_path: ""
+  # 配置参数
+  params: {}
+
+# 寒武纪配置（预留）
+cambricon:
+  # 是否启用
+  enabled: false
+  # 工具路径
+  tool_path: ""
+  # 配置参数
+  params: {}
+
+# 模型转换配置
+conversion:
+  # 临时文件目录
+  temp_dir: "/tmp/model_convert"
+  # 最大并发转换任务数
+  max_concurrent_tasks: 5
+  # 转换超时时间（秒）
+  timeout: 600
+  # 日志文件路径
+  log_file: "./logs/conversion.log"
+  # 是否保存转换历史
+  save_history: true
+
+# 日志配置
+logging:
+  # 日志级别
+  level: "INFO"
+  # 日志文件路径
+  file_path: "./logs/app.log"
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  # 日志文件最大大小（MB）
+  max_bytes: 100
+  # 日志文件备份数量
+  backup_count: 5

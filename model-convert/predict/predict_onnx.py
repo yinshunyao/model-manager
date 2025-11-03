@@ -742,8 +742,8 @@ def main():
     示例用法
     """
     # 示例：使用YOLO ONNX模型进行推理
-    model_path = "model_demo/out/yolo11n.onnx"  # 替换为实际的模型路径
-    image_path = "dataset/coco8/datasets/coco8/images/val/000000000049.jpg"  # 替换为实际的图片路径
+    model_path = "../model_demo/out/yolo11n.onnx"  # 替换为实际的模型路径
+    image_path = "../dataset/coco8/datasets/coco8/images/val/000000000049.jpg"  # 替换为实际的图片路径
     
     if not os.path.exists(model_path):
         print(f"模型文件不存在: {model_path}")

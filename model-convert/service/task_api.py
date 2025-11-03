@@ -219,6 +219,31 @@ def create_huawei_onnx_to_om_task(input_path: str, output_path: str,
         task_id=task_id
     )
 
+
+def create_yolo_to_onnx_task(input_path: str, output_path: str, 
+                            parameters: Optional[Dict[str, Any]] = None, 
+                            task_id: Optional[str] = None) -> str:
+    """
+    创建YOLO到ONNX的任务（便捷函数）
+    
+    Args:
+        input_path: 输入YOLO模型路径
+        output_path: 输出ONNX模型路径
+        parameters: 转换参数
+        task_id: 可选的任务ID
+    
+    Returns:
+        创建的任务ID
+    """
+    return create_conversion_task(
+        task_type=TASK_TYPES['YOLO_TO_ONNX'],
+        platform=SUPPORTED_PLATFORMS['ONNX'],
+        input_path=input_path,
+        output_path=output_path,
+        parameters=parameters,
+        task_id=task_id
+    )
+
 def get_task_status(task_id: str) -> Optional[str]:
     """
     获取任务状态

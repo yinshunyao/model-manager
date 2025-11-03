@@ -33,14 +33,16 @@ TASK_STATUS = {
 SUPPORTED_PLATFORMS = {
     'HUAWEI': 'huawei',        # 华为昇腾
     'ROCKCHIP': 'rockchip',    # 瑞芯微
-    'CAMBRICON': 'cambricon'   # 寒武纪
+    'CAMBRICON': 'cambricon',  # 寒武纪
+    'ONNX': 'onnx'             # ONNX平台
 }
 
 # 支持的任务类型
 TASK_TYPES = {
     'ONNX_TO_OM': 'onnx_to_om',           # ONNX转OM（华为）
     'ONNX_TO_RKNN': 'onnx_to_rknn',       # ONNX转RKNN（瑞芯微）
-    'ONNX_TO_CAMB': 'onnx_to_cambricon'   # ONNX转寒武纪
+    'ONNX_TO_CAMB': 'onnx_to_cambricon',  # ONNX转寒武纪
+    'YOLO_TO_ONNX': 'yolo_to_onnx'        # YOLO转ONNX
 }
 
 class TaskManager:
@@ -383,6 +385,7 @@ def get_task_manager() -> TaskManager:
 if __name__ == "__main__":
     # 测试任务管理器功能
     manager = TaskManager()
+    task_id = None
     
     # 创建测试任务
     try:
@@ -411,4 +414,5 @@ if __name__ == "__main__":
         
     finally:
         # 清理测试数据
-        manager.delete_task(task_id)
+        if task_id is not None:
+            manager.delete_task(task_id)

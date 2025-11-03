@@ -36,6 +36,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入任务管理API
 from service.task_api import (
     create_huawei_onnx_to_om_task,
+    create_yolo_to_onnx_task,
     get_task_info,
     get_task_status,
     is_task_completed,
@@ -83,6 +84,15 @@ class ONNXToOMRequest(BaseModel):
     extra_params: Optional[Dict[str, str]] = Field(None, description="额外的ATC工具参数")
 
 
+# YOLO到ONNX转换请求模型
+class YOLOToONNXRequest(BaseModel):
+    input_model_path: str = Field(..., description="输入YOLO模型路径（支持本地路径或MinIO路径格式bucket/object）")
+    output_model_path: str = Field(..., description="输出ONNX模型路径（支持本地路径或MinIO路径格式bucket/object）")
+    imgsz: int = Field(640, description="输入图像大小")
+    simplify: bool = Field(False, description="是否简化ONNX模型")
+    opset_version: int = Field(17, description="ONNX Opset版本")
+    extra_params: Optional[Dict[str, Any]] = Field(None, description="额外参数")
+
 # 通用模型转换请求模型
 class ModelConvertRequest(BaseModel):
     input_model_path: str = Field(..., description="输入模型路径（支持本地路径或MinIO路径格式bucket/object）")
@@ -91,6 +101,58 @@ class ModelConvertRequest(BaseModel):
     model_type: str = Field(..., description="模型类型，如: onnx, pytorch等")
     params: Optional[Dict[str, Any]] = Field(None, description="平台特定参数")
 
+
+@app.post("/convert/yolo-to-onnx", response_model=BaseResponse, summary="YOLO到ONNX转换")
+async def convert_yolo_to_onnx(request: YOLOToONNXRequest):
+    """
+    将YOLO模型转换为ONNX格式（创建任务）
+    
+    - **input_model_path**: 输入YOLO模型路径（支持本地路径或MinIO路径格式bucket/object）
+    - **output_model_path**: 输出ONNX模型路径
+    - **imgsz**: 输入图像大小，默认为640
+    - **simplify**: 是否简化ONNX模型，默认为False
+    - **opset_version**: ONNX Opset版本，默认为17
+    - **extra_params**: 额外参数
+    """
+    try:
+        # 构建转换参数
+        parameters = {
+            "imgsz": request.imgsz,
+            "simplify": request.simplify,
+            "opset_version": request.opset_version
+        }
+        
+        # 添加额外参数
+        if request.extra_params:
+            parameters.update(request.extra_params)
+        
+        # 调用任务管理API创建转换任务
+        task_id = create_yolo_to_onnx_task(
+            input_path=request.input_model_path,
+            output_path=request.output_model_path,
+            parameters=parameters
+        )
+        
+        logger.info(f"成功创建YOLO到ONNX转换任务: {task_id}")
+        
+        return BaseResponse(
+            success=True,
+            message="任务创建成功，请通过任务ID查询状态",
+            data={
+                "task_id": task_id,
+                "input_model": request.input_model_path,
+                "output_model": request.output_model_path,
+                "task_type": "yolo_to_onnx"
+            }
+        )
+        
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"文件不存在: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"参数错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"创建任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
 
 @app.post("/convert/onnx-to-om", response_model=BaseResponse, summary="华为平台ONNX转OM")
 async def convert_onnx_to_om(request: ONNXToOMRequest):
@@ -208,7 +270,28 @@ async def convert_model(request: ModelConvertRequest):
                     "input_model": request.input_model_path,
                     "output_model": request.output_model_path,
                     "platform": request.platform,
-                    "model_type": request.model_type
+                    "model_type": request.model_type,
+                    "task_type": TASK_TYPES['ONNX_TO_OM']
+                }
+            )
+        elif request.model_type == "yolo" and request.platform == "onnx":
+            # 调用YOLO到ONNX转换任务创建接口
+            task_id = create_yolo_to_onnx_task(
+                input_path=request.input_model_path,
+                output_path=request.output_model_path,
+                parameters=request.params
+            )
+            
+            return BaseResponse(
+                success=True,
+                message="任务创建成功，请通过任务ID查询状态",
+                data={
+                    "task_id": task_id,
+                    "input_model": request.input_model_path,
+                    "output_model": request.output_model_path,
+                    "platform": request.platform,
+                    "model_type": request.model_type,
+                    "task_type": TASK_TYPES['YOLO_TO_ONNX']
                 }
             )
             
@@ -242,7 +325,8 @@ async def health_check():
             "platforms": {
                 "ascend": {"onnx_to_om": "available"},
                 "rockchip": "not_implemented",
-                "cambricon": "not_implemented"
+                "cambricon": "not_implemented",
+                "onnx": {"yolo_to_onnx": "available"}
             },
             "supported_platforms": list(SUPPORTED_PLATFORMS.values()),
             "supported_task_types": list(TASK_TYPES.values()),

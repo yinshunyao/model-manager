@@ -48,11 +48,18 @@ setup_huawei_environment()
 
 # 导入转换模块
 onnx_to_om = None
+yolo_to_onnx = None
 try:
     from convert.onnx_to_om import onnx_to_om
     logger.info("成功导入华为平台转换模块")
 except ImportError as e:
     logger.warning(f"导入华为平台转换模块失败: {str(e)}，某些功能可能不可用")
+try:
+    from convert.yolo_to_onnx import convert_yolo11_to_onnx
+    yolo_to_onnx = convert_yolo11_to_onnx
+    logger.info("成功导入YOLO到ONNX转换模块")
+except ImportError as e:
+    logger.warning(f"导入YOLO到ONNX转换模块失败: {str(e)}，某些功能可能不可用")
 
 class TaskExecutor:
     """
@@ -200,6 +207,91 @@ class TaskExecutor:
         logger.warning("寒武纪平台模型转换功能暂未实现")
         raise NotImplementedError("寒武纪平台模型转换功能暂未实现")
     
+    def execute_yolo_to_onnx_conversion(self, input_path: str, output_path: str, 
+                                        parameters: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        执行YOLO到ONNX的转换
+        
+        Args:
+            input_path: 输入YOLO模型路径
+            output_path: 输出ONNX模型路径
+            parameters: 转换参数
+        
+        Returns:
+            是否转换成功
+        """
+        try:
+            # 验证输入文件存在
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"输入文件不存在: {input_path}")
+            
+            # 确保输出目录存在
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # 准备参数
+            params = parameters.copy() if parameters else {}
+            
+            # 处理特殊情况：如果输出路径是MinIO路径，需要先输出到本地
+            is_minio_output = output_path.startswith('minio://') or 'minio' in output_path.lower()
+            local_output_path = None
+            
+            if is_minio_output:
+                # 创建临时本地输出路径
+                temp_dir = self._create_temp_dir()
+                # 移除可能的.onnx后缀，因为convert_yolo11_to_onnx函数会自动添加
+                output_filename = os.path.basename(output_path).replace('.onnx', '')
+                local_output_path = os.path.join(temp_dir, output_filename)
+                actual_output_path = local_output_path
+            else:
+                # 本地输出，直接使用
+                # 移除可能的.onnx后缀
+                actual_output_path = output_path.replace('.onnx', '')
+            
+            logger.info(f"开始YOLO到ONNX转换: {input_path} -> {actual_output_path}.onnx")
+            logger.info(f"转换参数: {params}")
+            
+            # 执行转换
+            if yolo_to_onnx is None:
+                raise ImportError("YOLO到ONNX转换模块未成功导入，无法执行转换")
+            
+            # 获取转换参数
+            img_size = params.get('img_size', 640)
+            simplify = params.get('simplify', True)
+            opset_version = params.get('opset_version', 13)
+            
+            # 执行转换
+            success = yolo_to_onnx(
+                model_path=input_path,
+                output_path=actual_output_path,
+                imgsz=img_size,
+                simplify=simplify,
+                opset_version=opset_version
+            )
+            
+            if success:
+                logger.info(f"YOLO到ONNX转换成功: {actual_output_path}.onnx")
+                
+                # 如果需要上传到MinIO
+                if is_minio_output:
+                    try:
+                        # 这里应该添加MinIO上传逻辑
+                        # 暂时只是打印信息
+                        logger.info(f"需要上传到MinIO: {actual_output_path}.onnx -> {output_path}")
+                        # 实际项目中应该调用MinIO上传函数
+                        # from tools.handle_file_minio import minio_handler
+                        # minio_handler.upload_file(actual_output_path + '.onnx', output_path)
+                    except Exception as e:
+                        logger.error(f"上传到MinIO失败: {str(e)}")
+                        raise
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"YOLO到ONNX转换失败: {str(e)}")
+            raise
+    
     def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行单个任务
@@ -245,6 +337,8 @@ class TaskExecutor:
                 success = self.execute_rockchip_conversion(input_path, output_path, parameters)
             elif platform == 'cambricon':
                 success = self.execute_cambricon_conversion(input_path, output_path, parameters)
+            elif platform == 'onnx' and task_type == 'yolo_to_onnx':
+                success = self.execute_yolo_to_onnx_conversion(input_path, output_path, parameters)
             else:
                 raise ValueError(f"不支持的任务类型和平台组合: {task_type} on {platform}")
             

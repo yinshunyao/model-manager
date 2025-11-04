@@ -28,8 +28,6 @@ class DatabaseManager:
             db_path: SQLite数据库文件路径
         """
         self.db_path = db_path
-        self.conn = None
-        self.cursor = None
         self._init_database()
     
     def _init_database(self):
@@ -43,11 +41,11 @@ class DatabaseManager:
                 os.makedirs(db_dir, exist_ok=True)
             
             # 连接数据库
-            self.conn = sqlite3.connect(self.db_path)
-            self.cursor = self.conn.cursor()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             
             # 创建任务表
-            self.cursor.execute('''
+            cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
                     task_type TEXT NOT NULL,
@@ -64,32 +62,18 @@ class DatabaseManager:
                 )
             ''')
             
-            self.conn.commit()
+            conn.commit()
+            conn.close()
             logger.info(f"数据库初始化成功: {self.db_path}")
         except Exception as e:
             logger.error(f"数据库初始化失败: {str(e)}")
-            if self.conn:
-                self.conn.rollback()
             raise
     
     def close(self):
         """
-        关闭数据库连接
+        关闭数据库连接（空实现，因为每个操作都使用独立连接）
         """
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-            self.cursor = None
-            logger.info("数据库连接已关闭")
-    
-    def _ensure_connection(self):
-        """
-        确保数据库连接处于活动状态
-        """
-        if self.conn is None or self.cursor is None:
-            self.conn = sqlite3.connect(self.db_path)
-            self.cursor = self.conn.cursor()
-            logger.info("数据库连接已重新建立")
+        logger.info("数据库连接已关闭")
     
     def create_task(self, task_data: Dict[str, Any]) -> str:
         """
@@ -101,8 +85,11 @@ class DatabaseManager:
         Returns:
             task_id: 创建的任务ID
         """
+        conn = None
         try:
-            self._ensure_connection()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
             task_id = task_data.pop('id') if 'id' in task_data else None
             if task_id is None:
                 raise ValueError("任务数据必须包含id字段")
@@ -113,15 +100,17 @@ class DatabaseManager:
             values = [task_id] + list(task_data.values())
             
             sql = f"INSERT INTO tasks ({', '.join(keys)}) VALUES ({', '.join(placeholders)})"
-            self.cursor.execute(sql, values)
-            self.conn.commit()
+            cursor.execute(sql, values)
+            conn.commit()
+            conn.close()
             
             logger.info(f"任务创建成功: {task_id}")
             return task_id
         except Exception as e:
             logger.error(f"任务创建失败: {str(e)}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                conn.rollback()
+                conn.close()
             raise
     
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -134,18 +123,27 @@ class DatabaseManager:
         Returns:
             任务信息字典，如果任务不存在则返回None
         """
+        conn = None
         try:
-            self._ensure_connection()
-            self.cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-            row = self.cursor.fetchone()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
             
             if row:
                 # 获取列名
-                columns = [desc[0] for desc in self.cursor.description]
-                return dict(zip(columns, row))
-            return None
+                columns = [desc[0] for desc in cursor.description]
+                result = dict(zip(columns, row))
+            else:
+                result = None
+            
+            conn.close()
+            return result
         except Exception as e:
             logger.error(f"获取任务失败: {str(e)}")
+            if conn:
+                conn.close()
             raise
     
     def get_tasks_by_status(self, status: str) -> List[Dict[str, Any]]:
@@ -158,16 +156,24 @@ class DatabaseManager:
         Returns:
             任务列表
         """
+        conn = None
         try:
-            self._ensure_connection()
-            self.cursor.execute("SELECT * FROM tasks WHERE status = ? ORDER BY created_at ASC", (status,))
-            rows = self.cursor.fetchall()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM tasks WHERE status = ? ORDER BY created_at ASC", (status,))
+            rows = cursor.fetchall()
             
             # 获取列名
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
+            columns = [desc[0] for desc in cursor.description]
+            result = [dict(zip(columns, row)) for row in rows]
+            
+            conn.close()
+            return result
         except Exception as e:
             logger.error(f"获取任务列表失败: {str(e)}")
+            if conn:
+                conn.close()
             raise
     
     def get_all_tasks(self) -> List[Dict[str, Any]]:
@@ -177,16 +183,24 @@ class DatabaseManager:
         Returns:
             任务列表
         """
+        conn = None
         try:
-            self._ensure_connection()
-            self.cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
-            rows = self.cursor.fetchall()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
+            rows = cursor.fetchall()
             
             # 获取列名
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
+            columns = [desc[0] for desc in cursor.description]
+            result = [dict(zip(columns, row)) for row in rows]
+            
+            conn.close()
+            return result
         except Exception as e:
             logger.error(f"获取所有任务失败: {str(e)}")
+            if conn:
+                conn.close()
             raise
     
     def get_tasks_paginated(self, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
@@ -200,30 +214,33 @@ class DatabaseManager:
         Returns:
             包含任务列表、总数、页码等信息的字典
         """
+        conn = None
         try:
-            self._ensure_connection()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             
             # 计算偏移量
             offset = (page - 1) * page_size
             
             # 获取总数
-            self.cursor.execute("SELECT COUNT(*) FROM tasks")
-            total = self.cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM tasks")
+            total = cursor.fetchone()[0]
             
             # 获取分页数据
-            self.cursor.execute(
+            cursor.execute(
                 "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?", 
                 (page_size, offset)
             )
-            rows = self.cursor.fetchall()
+            rows = cursor.fetchall()
             
             # 获取列名
-            columns = [desc[0] for desc in self.cursor.description]
+            columns = [desc[0] for desc in cursor.description]
             tasks = [dict(zip(columns, row)) for row in rows]
             
             # 计算总页数
             total_pages = (total + page_size - 1) // page_size if total > 0 else 0
             
+            conn.close()
             return {
                 'tasks': tasks,
                 'total': total,
@@ -233,6 +250,8 @@ class DatabaseManager:
             }
         except Exception as e:
             logger.error(f"分页获取任务列表失败: {str(e)}")
+            if conn:
+                conn.close()
             raise
     
     def delete_tasks_batch(self, task_ids: List[str]) -> Dict[str, bool]:
@@ -245,15 +264,17 @@ class DatabaseManager:
         Returns:
             每个任务ID对应的删除结果字典
         """
+        conn = None
         try:
-            self._ensure_connection()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             results = {}
             
             # 逐个删除任务
             for task_id in task_ids:
                 try:
-                    self.cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-                    results[task_id] = self.cursor.rowcount > 0
+                    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                    results[task_id] = cursor.rowcount > 0
                     if results[task_id]:
                         logger.info(f"任务删除成功: {task_id}")
                     else:
@@ -263,13 +284,15 @@ class DatabaseManager:
                     results[task_id] = False
             
             # 提交所有删除操作
-            self.conn.commit()
+            conn.commit()
+            conn.close()
             
             return results
         except Exception as e:
             logger.error(f"批量删除任务失败: {str(e)}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                conn.rollback()
+                conn.close()
             raise
     
     def update_task(self, task_id: str, updates: Dict[str, Any]):
@@ -280,21 +303,25 @@ class DatabaseManager:
             task_id: 任务ID
             updates: 更新的字段和值
         """
+        conn = None
         try:
-            self._ensure_connection()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             # 准备SQL更新语句
             set_clause = ', '.join([f"{key} = ?" for key in updates.keys()])
             values = list(updates.values()) + [task_id]
             
             sql = f"UPDATE tasks SET {set_clause} WHERE id = ?"
-            self.cursor.execute(sql, values)
-            self.conn.commit()
+            cursor.execute(sql, values)
+            conn.commit()
+            conn.close()
             
             logger.info(f"任务更新成功: {task_id}, 更新字段: {list(updates.keys())}")
         except Exception as e:
             logger.error(f"任务更新失败: {str(e)}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                conn.rollback()
+                conn.close()
             raise
     
     def delete_task(self, task_id: str) -> bool:
@@ -307,11 +334,15 @@ class DatabaseManager:
         Returns:
             是否删除成功
         """
+        conn = None
         try:
-            self._ensure_connection()
-            self.cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-            affected_rows = self.cursor.rowcount
-            self.conn.commit()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            affected_rows = cursor.rowcount
+            conn.commit()
+            conn.close()
             
             if affected_rows > 0:
                 logger.info(f"任务删除成功: {task_id}")
@@ -321,8 +352,9 @@ class DatabaseManager:
                 return False
         except Exception as e:
             logger.error(f"任务删除失败: {str(e)}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                conn.rollback()
+                conn.close()
             raise
 
 # 创建全局数据库管理器实例
@@ -343,6 +375,7 @@ def get_db_manager() -> DatabaseManager:
 if __name__ == "__main__":
     # 测试数据库操作
     db = DatabaseManager()
+    task_id = None
     
     # 测试创建任务
     task_data = {
@@ -372,5 +405,6 @@ if __name__ == "__main__":
         
     finally:
         # 清理测试数据
-        db.delete_task(task_id)
+        if task_id is not None:
+            db.delete_task(task_id)
         db.close()

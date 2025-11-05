@@ -4,7 +4,7 @@
 
 此脚本用于测试多个线程同时访问SQLite数据库时的线程安全问题。
 """
-
+import logging
 import os
 import sys
 import threading
@@ -14,10 +14,10 @@ import json
 
 # 将根目录添加到Python路径
 root_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+logging.warning(f"根目录: {root_path}")
 sys.path.insert(0, root_path)
 
-# 从model-convert目录导入模块
-from model_convert.service.task_manager import get_task_manager
+from service.task_manager import get_task_manager
 
 # 测试任务数量
 NUM_TEST_TASKS = 10

@@ -73,6 +73,13 @@ atc --model=/root/miniconda3/convert/yolo11n.onnx --framework=5 --output=/tmp/tm
 
 ```
 
+# 
+```shell
+ atc --model=./yolo11n.onnx --framework=5 --output=./yolo11n --input_shape=images:1,3,640,640 --soc_version=Ascend910B --log=error
+ 
+ atc --model=./yolo11n.onnx --framework=5 --output=./yolo11n --input_shape=images:1,3,640,640 --soc_version=Ascend910B2  --log=error
+```
+
 
 # tookit安装和使用
 https://www.hiascend.com/developer

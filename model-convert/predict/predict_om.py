@@ -1,8 +1,11 @@
 import logging
+import onnx
+import os
+import subprocess
+from typing import Dict, Optional, Tuple
 
 import cv2
 import numpy as np
-import os
 
 
 class HUAWEI_910B_Predictor:
@@ -10,15 +13,22 @@ class HUAWEI_910B_Predictor:
     华为910B设备上的模型推理类，支持目标检测和图像分类任务
     """
     
-    def __init__(self, om_model_path):
+    def __init__(self, om_model_path, debug=False):
         """
         初始化函数，加载OM模型到内存
         
         Args:
             om_model_path (str): OM模型文件路径
+            debug (bool): 是否开启调试模式，默认False
         """
         self.om_model_path = om_model_path
         self.model = None
+        self.debug = debug
+        
+        # 设置调试环境变量
+        if self.debug:
+            os.environ['ASCEND_GLOBAL_LOG_LEVEL'] = '0'
+            os.environ['ASCEND_SLOG_PRINT_TO_STDOUT'] = '1'
         
         # 验证模型文件存在
         if not os.path.exists(om_model_path):
@@ -38,7 +48,7 @@ class HUAWEI_910B_Predictor:
         try:
             # 尝试导入华为AscendCL API
             try:
-                import acl
+                import acl  # type: ignore
                 acl_available = True
             except ImportError:
                 acl_available = False
@@ -47,28 +57,28 @@ class HUAWEI_910B_Predictor:
                 raise ImportError("华为AscendCL API不可用")
             
             # 初始化ACL
-            ret = acl.init()
+            ret = acl.init()  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"ACL初始化失败: {ret}")
             
             # 设置运行模式
-            ret = acl.rt.set_device(0)
+            ret = acl.rt.set_device(0)  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"设置设备失败: {ret}")
             
             # 创建上下文
-            context, ret = acl.rt.create_context(0)
+            context, ret = acl.rt.create_context(0)  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"创建上下文失败: {ret}")
             
             # 加载模型
-            model_id, ret = acl.mdl.load_from_file(self.om_model_path)
+            model_id, ret = acl.mdl.load_from_file(self.om_model_path)  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"加载模型失败: {ret}")
             
             # 获取模型描述信息
-            model_desc = acl.mdl.create_desc()
-            ret = acl.mdl.get_desc(model_desc, model_id)
+            model_desc = acl.mdl.create_desc()  # type: ignore
+            ret = acl.mdl.get_desc(model_desc, model_id)  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"获取模型描述失败: {ret}")
             
@@ -154,28 +164,61 @@ class HUAWEI_910B_Predictor:
                 
                 # 华为设备上的实际推理
                 try:
-                    import acl
+                    import acl  # type: ignore
                     
-                    # 获取输入/输出缓冲区
-                    input_buffer = acl.mdl.get_input(self.model.get('model_id'), 0)
-                    output_buffer = acl.mdl.get_output(self.model.get('model_id'), 0)
+                    # 获取模型描述
+                    model_desc = self.model.get('model_desc')
+                    model_id = self.model.get('model_id')
+                    
+                    # 获取输入数量
+                    num_inputs = acl.mdl.get_num_inputs(model_desc)  # type: ignore
+                    if num_inputs < 1:
+                        raise RuntimeError("模型没有输入")
+                    
+                    # 获取输入大小
+                    input_size = acl.mdl.get_input_size_by_index(model_desc, 0)  # type: ignore
+                    
+                    # 分配输入缓冲区
+                    input_buffer, ret = acl.rt.malloc(input_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"分配输入缓冲区失败: {ret}")
                     
                     # 复制输入数据到设备
-                    ret = acl.rt.memcpy(input_buffer, input_data.nbytes, 
-                                       acl.util.bytes_to_ptr(input_data.tobytes()), 
-                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)
+                    ret = acl.rt.memcpy(input_buffer, input_size,  # type: ignore
+                                       acl.util.bytes_to_ptr(input_data.tobytes()),  # type: ignore
+                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"复制输入数据失败: {ret}")
                     
                     # 执行模型推理
-                    ret = acl.mdl.execute(self.model.get('model_id'))
+                    ret = acl.mdl.execute(model_id, [input_buffer])  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"执行推理失败: {ret}")
                     
+                    # 获取输出数量
+                    num_outputs = acl.mdl.get_num_outputs(model_desc)  # type: ignore
+                    if num_outputs < 1:
+                        raise RuntimeError("模型没有输出")
+                    
+                    # 获取输出大小
+                    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)  # type: ignore
+                    
+                    # 分配输出缓冲区
+                    output_buffer, ret = acl.rt.malloc(output_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"分配输出缓冲区失败: {ret}")
+                    
                     # 从设备获取输出
-                    output_size = acl.mdl.get_output_size_by_index(self.model.get('model_desc'), 0)
                     output_data = np.zeros(output_size // 4, dtype=np.float32)
-                    ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()), 
+                    ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
                                        output_data.nbytes, output_buffer, 
-                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)
+                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"复制输出数据失败: {ret}")
+                    
+                    # 释放缓冲区
+                    acl.rt.free(input_buffer)  # type: ignore
+                    acl.rt.free(output_buffer)  # type: ignore
                     
                     # 解析输出结果（这里需要根据实际模型输出格式进行调整）
                     # 假设输出是 [x1, y1, x2, y2, confidence, class_id, class_id, ...] 的格式
@@ -239,28 +282,61 @@ class HUAWEI_910B_Predictor:
                 
                 # 华为设备上的实际推理
                 try:
-                    import acl
+                    import acl  # type: ignore
                     
-                    # 获取输入/输出缓冲区
-                    input_buffer = acl.mdl.get_input(self.model.get('model_id'), 0)
-                    output_buffer = acl.mdl.get_output(self.model.get('model_id'), 0)
+                    # 获取模型描述
+                    model_desc = self.model.get('model_desc')
+                    model_id = self.model.get('model_id')
+                    
+                    # 获取输入数量
+                    num_inputs = acl.mdl.get_num_inputs(model_desc)  # type: ignore
+                    if num_inputs < 1:
+                        raise RuntimeError("模型没有输入")
+                    
+                    # 获取输入大小
+                    input_size = acl.mdl.get_input_size_by_index(model_desc, 0)  # type: ignore
+                    
+                    # 分配输入缓冲区
+                    input_buffer, ret = acl.rt.malloc(input_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"分配输入缓冲区失败: {ret}")
                     
                     # 复制输入数据到设备
-                    ret = acl.rt.memcpy(input_buffer, input_data.nbytes, 
-                                       acl.util.bytes_to_ptr(input_data.tobytes()), 
-                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)
+                    ret = acl.rt.memcpy(input_buffer, input_size,  # type: ignore
+                                       acl.util.bytes_to_ptr(input_data.tobytes()),  # type: ignore
+                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"复制输入数据失败: {ret}")
                     
                     # 执行模型推理
-                    ret = acl.mdl.execute(self.model.get('model_id'))
+                    ret = acl.mdl.execute(model_id, [input_buffer])  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"执行推理失败: {ret}")
                     
+                    # 获取输出数量
+                    num_outputs = acl.mdl.get_num_outputs(model_desc)  # type: ignore
+                    if num_outputs < 1:
+                        raise RuntimeError("模型没有输出")
+                    
+                    # 获取输出大小
+                    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)  # type: ignore
+                    
+                    # 分配输出缓冲区
+                    output_buffer, ret = acl.rt.malloc(output_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"分配输出缓冲区失败: {ret}")
+                    
                     # 从设备获取输出
-                    output_size = acl.mdl.get_output_size_by_index(self.model.get('model_desc'), 0)
                     output_data = np.zeros(output_size // 4, dtype=np.float32)
-                    ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()), 
+                    ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
                                        output_data.nbytes, output_buffer, 
-                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)
+                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)  # type: ignore
+                    if ret != 0:
+                        raise RuntimeError(f"复制输出数据失败: {ret}")
+                    
+                    # 释放缓冲区
+                    acl.rt.free(input_buffer)  # type: ignore
+                    acl.rt.free(output_buffer)  # type: ignore
                     
                     # 解析分类结果
                     # 实际解析代码会根据具体模型输出格式进行实现
@@ -297,18 +373,18 @@ class HUAWEI_910B_Predictor:
             try:
                 # 尝试导入华为AscendCL API
                 try:
-                    import acl
+                    import acl  # type: ignore
                     acl_available = True
                 except ImportError:
                     acl_available = False
                 
                 if acl_available:
                     # 释放资源
-                    acl.mdl.destroy_desc(self.model.get('model_desc'))
-                    acl.mdl.unload(self.model.get('model_id'))
-                    acl.rt.destroy_context(self.model.get('context'))
-                    acl.rt.reset_device(self.model.get('device_id', 0))
-                    acl.finalize()
+                    acl.mdl.destroy_desc(self.model.get('model_desc'))  # type: ignore
+                    acl.mdl.unload(self.model.get('model_id'))  # type: ignore
+                    acl.rt.destroy_context(self.model.get('context'))  # type: ignore
+                    acl.rt.reset_device(self.model.get('device_id', 0))  # type: ignore
+                    acl.finalize()  # type: ignore
                     
                     print("OM模型资源已释放")
             except Exception:
@@ -316,18 +392,165 @@ class HUAWEI_910B_Predictor:
                 pass
 
 
+def get_input_shape_from_onnx(onnx_model_path: str) -> Dict[str, Tuple[int, ...]]:
+    """
+    从 ONNX 模型文件中自动获取输入形状和名称
+    
+    Args:
+        onnx_model_path (str): ONNX 模型文件路径
+    
+    Returns:
+        Dict[str, Tuple[int, ...]]: 输入名称到形状的映射字典，例如 {"images": (1, 3, 640, 640)}
+    
+    Raises:
+        ValueError: 当无法从模型中获取输入信息时
+    """
+    try:
+        model = onnx.load(onnx_model_path)
+        inputs = model.graph.input
+        
+        if not inputs:
+            raise ValueError("无法从 ONNX 模型中获取输入信息")
+        
+        input_info = {}
+        for input_node in inputs:
+            input_name = input_node.name
+            shape = []
+            for dim in input_node.type.tensor_type.shape.dim:
+                if dim.dim_value > 0:
+                    shape.append(int(dim.dim_value))
+                elif dim.dim_param:
+                    shape.append(1)  # 参数化维度默认使用 1
+                else:
+                    shape.append(1)  # 未知维度默认使用 1
+            input_info[input_name] = tuple(shape)
+        
+        if not input_info:
+            raise ValueError("无法从 ONNX 模型中解析出有效的输入信息")
+        
+        return input_info
+    except Exception as e:
+        raise ValueError(f"从 ONNX 模型获取输入信息时出错: {str(e)}")
+
+def detect_soc_version() -> str:
+    """
+    自动检测华为昇腾设备的 SOC 版本
+    
+    Returns:
+        str: SOC 版本字符串，例如 "Ascend910B"、"Ascend310" 等。
+             如果检测失败，返回默认值 "Ascend910B"。
+    """
+    try:
+        import acl  # type: ignore
+        # 初始化 ACL
+        acl.init()
+        # 设置设备
+        acl.rt.set_device(0)
+        # 创建上下文
+        context, ret = acl.rt.create_context(0)
+        # 获取 SOC 版本信息（参数 1 表示获取 SOC 版本）
+        soc_version_bytes = acl.rt.get_device_info(1)
+        # 解码为字符串
+        soc_version = soc_version_bytes.decode('utf-8')
+        # 清理资源
+        acl.rt.destroy_context(context)
+        acl.rt.reset_device(0)
+        acl.finalize()
+        return soc_version
+    except Exception as e:
+        logging.warning(f"SOC 版本自动检测失败: {e}，将使用默认值 Ascend910B")
+        return "Ascend910B"
+
+def onnx_to_om(
+    onnx_model_path: str,
+    output_om_path: str,
+    soc_version: Optional[str] = None,
+    precision_mode: str = "allow_fp32_to_fp16",
+    log_level: str = "error",
+    **kwargs
+) -> bool:
+    """
+    将 ONNX 模型转换为华为昇腾设备支持的 OM 格式模型
+    
+    Args:
+        onnx_model_path (str): ONNX 模型文件路径
+        output_om_path (str): 输出 OM 模型文件路径
+        soc_version (str, optional): 目标昇腾处理器版本。如果为 None，将自动检测。
+        precision_mode (str, optional): 精度模式，默认为 "allow_fp32_to_fp16"
+        log_level (str, optional): 日志级别，默认为 "error"
+        **kwargs: 其他 ATC 工具参数
+    
+    Returns:
+        bool: 转换是否成功
+    
+    Raises:
+        FileNotFoundError: 当 ONNX 模型文件不存在时
+        ValueError: 当无法获取输入信息或转换参数无效时
+    """
+    # 验证 ONNX 模型文件存在
+    if not os.path.exists(onnx_model_path):
+        raise FileNotFoundError(f"ONNX 模型文件不存在: {onnx_model_path}")
+    
+    # 自动获取输入层名称和参数
+    input_info = get_input_shape_from_onnx(onnx_model_path)
+    if not input_info:
+        raise ValueError("无法从 ONNX 模型中获取有效的输入信息")
+    
+    # 自动检测 SOC 版本
+    if soc_version is None:
+        soc_version = detect_soc_version()
+    
+    # 构建 ATC 命令
+    atc_cmd = [
+        "atc",
+        f"--model={onnx_model_path}",
+        f"--output={output_om_path}",
+        f"--soc_version={soc_version}",
+        f"--precision_mode={precision_mode}",
+        f"--log={log_level}",
+    ]
+    
+    # 添加输入形状参数
+    for input_name, input_shape in input_info.items():
+        shape_str = ",".join(map(str, input_shape))
+        atc_cmd.append(f"--input_shape={input_name}:{shape_str}")
+    
+    # 添加其他参数
+    for key, value in kwargs.items():
+        atc_cmd.append(f"--{key}={value}")
+    
+    logging.info(f"执行 ATC 转换命令: {' '.join(atc_cmd)}")
+    
+    try:
+        # 执行 ATC 命令
+        result = subprocess.run(
+            atc_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        logging.info(f"ATC 转换成功: {result.stdout}")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"ATC 转换失败: {e.stderr}")
+        return False
+    except Exception as e:
+        logging.error(f"转换过程中发生未知错误: {str(e)}")
+        return False
+
 if __name__ == "__main__":
     # 当前代码文件夹
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     # 示例：使用对象进行推理
     # 注意：这里使用示例模型路径，实际使用时请替换为真实的OM模型路径
-    om_model_path = os.path.join(current_dir, "yolo11n.om.om")
+    om_model_path = os.path.join(current_dir, "..", "model_demo",  "yolo11n.om")
     # 图片路径 
-    test_image_path = os.path.join(current_dir, "000000000009.jpg")
+    test_image_path = os.path.join(current_dir, "..", "000000000009.jpg")
     try:
-        # 创建预测器实例
-        predictor = HUAWEI_910B_Predictor(om_model_path)
+        # 创建预测器实例（开启调试模式）
+        predictor = HUAWEI_910B_Predictor(om_model_path, debug=True)
         
         # 创建测试图像（使用随机噪声或从文件读取）
         # 方法1：使用随机噪声作为测试图像

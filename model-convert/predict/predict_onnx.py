@@ -743,16 +743,16 @@ def main():
     """
     # 示例：使用YOLO ONNX模型进行推理
     model_path = "../model_demo/out/yolo11n.onnx"  # 替换为实际的模型路径
-    image_path = "../dataset/coco8/datasets/coco8/images/val/000000000049.jpg"  # 替换为实际的图片路径
-    
+    # image_path = "../../dataset/coco8/datasets/coco8/images/val/000000000049.jpg"  # 替换为实际的图片路径
+    image_path = "/Users/shunyaoyin/Documents/code/other/model-manager/dataset/coco8/datasets/coco8/images/train/000000000009.jpg"
     if not os.path.exists(model_path):
         print(f"模型文件不存在: {model_path}")
         print("请确保模型文件存在，或修改model_path变量")
         
         # 尝试使用数据集中的图片进行测试
         dataset_images = [
-            "dataset/coco8/datasets/coco8/images/val/000000000036.jpg",
-            "dataset/coco8/datasets/coco8/images/val/000000000042.jpg"
+            "dataset/coco8/datasets/coco8/images/val/000000000009.jpg",
+            # "dataset/coco8/datasets/coco8/images/val/000000000042.jpg"
         ]
         
         for img_path in dataset_images:

@@ -64,23 +64,97 @@ ascend:
   # 日志级别
   log_level: "error"
 
-# 瑞芯微配置（预留）
+# 瑞芯微配置
 rockchip:
   # 是否启用
-  enabled: false
+  enabled: true
   # 工具路径
-  tool_path: ""
+  tool_path: "/usr/local/rockchip/rknn-toolkit2"
   # 配置参数
-  params: {}
+  params:
+    # 默认目标平台
+    default_target_platform: "rk3588"
+    # 支持的目标平台列表
+    supported_platforms:
+      - "rk3566"
+      - "rk3568"
+      - "rk3588"
+      - "rk3562"
+    # 默认精度模式
+    default_precision: "float32"
+    # 支持的精度模式列表
+    supported_precisions:
+      - "float32"
+      - "float16"
+      - "int8"
+    # RKNN转换工具路径
+    rknn_convert_path: "/usr/local/rockchip/rknn-toolkit2/bin/rknn_convert"
 
-# 寒武纪配置（预留）
+# 寒武纪配置
 cambricon:
   # 是否启用
-  enabled: false
+  enabled: true
   # 工具路径
-  tool_path: ""
+  tool_path: "/usr/local/cambricon/magicmind/bin"
   # 配置参数
-  params: {}
+  params:
+    # 默认精度模式
+    default_precision: "force_float32"
+    # 支持的精度模式列表
+    supported_precisions:
+      - "force_float32"
+      - "force_float16"
+    # MagicMind转换工具路径
+    mmconvert_path: "/usr/local/cambricon/magicmind/bin/mmconvert"
+
+# RabbitMQ配置
+rabbitmq:
+  # 连接配置
+  connection:
+    # RabbitMQ服务器地址
+    host: "localhost"
+    # RabbitMQ服务器端口
+    port: 5672
+    # RabbitMQ用户名
+    username: "guest"
+    # RabbitMQ密码
+    password: "guest"
+    # 虚拟主机
+    virtual_host: "/"
+    # 连接超时时间（秒）
+    connection_timeout: 10
+    # 心跳间隔（秒）
+    heartbeat: 60
+    # 是否启用TLS
+    use_ssl: false
+  # 队列配置
+  queues:
+    # 任务队列名称
+    task_queue: "model_convert_tasks"
+    # 结果队列名称
+    result_queue: "model_convert_results"
+    # 任务队列参数
+    task_queue_params:
+      # 是否持久化
+      durable: true
+      # 是否排他
+      exclusive: false
+      # 是否自动删除
+      auto_delete: false
+    # 结果队列参数
+    result_queue_params:
+      # 是否持久化
+      durable: true
+      # 是否排他
+      exclusive: false
+      # 是否自动删除
+      auto_delete: false
+    # 消息发布参数
+    publish_params:
+      # 投递模式（2表示持久化）
+      delivery_mode: 2
+      # 内容类型
+      content_type: "application/json"
 
 # 模型转换配置
 conversion:
@@ -94,6 +168,11 @@ conversion:
   log_file: "./logs/conversion.log"
   # 是否保存转换历史
   save_history: true
+
+# 任务管理中心配置
+task_center:
+  # 任务管理中心URL主地址，以http或https开头
+  url: "http://localhost:8000"
 
 # 日志配置
 logging:

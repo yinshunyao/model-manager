@@ -202,6 +202,67 @@
 - 只能恢复状态为 `paused` 的任务
 - 其他状态的任务恢复会失败
 
+### 7. 完成任务
+
+**接口**: `POST /tasks/complete`
+
+**描述**: 标记任务为完成或失败状态，并可附加日志信息
+
+**请求体**:
+```json
+{
+  "task_id": "string",
+  "error_message": "string (optional)",
+  "log_path": "string (optional)"
+}
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "message": "任务已完成，状态: completed",
+  "data": {
+    "task_id": "12345",
+    "status": "completed"
+  }
+}
+```
+
+**说明**:
+- 如果提供了`error_message`字段，则任务会被标记为失败状态
+- 如果没有提供`error_message`字段，则任务会被标记为完成状态
+- `log_path`是可选字段，用于指定任务日志文件的路径
+
+### 8. 取消任务
+
+**接口**: `POST /tasks/cancel`
+
+**描述**: 取消处于待处理状态的任务
+
+**请求体**:
+```json
+{
+  "task_id": "string"
+}
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "message": "任务已取消",
+  "data": {
+    "task_id": "12345",
+    "status": "failed"
+  }
+}
+```
+
+**说明**:
+- 仅允许取消处于`pending`状态的任务
+- 成功取消后，任务状态会变为`failed`，错误信息为"任务被用户取消"
+
 ## 任务状态说明
 
 完整的任务状态包括：

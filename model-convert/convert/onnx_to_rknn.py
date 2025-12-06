@@ -19,8 +19,8 @@ try:
 except ImportError:
     RKNN = None
     rknn_available = False
-    logger.warning("警告：RKNN Toolkit 2 未安装，无法执行ONNX到RKNN的转换。")
-    logger.warning("请参考瑞芯微官方文档安装RKNN Toolkit 2：https://www.rock-chips.com/a/cn/downloadCenter/index.html")
+    logging.warning("警告：RKNN Toolkit 2 未安装，无法执行ONNX到RKNN的转换。")
+    logging.warning("请参考瑞芯微官方文档安装RKNN Toolkit 2：https://www.rock-chips.com/a/cn/downloadCenter/index.html")
 
 
 def get_input_shape_from_onnx(onnx_model_path: str) -> Dict[str, Tuple[int, ...]]:

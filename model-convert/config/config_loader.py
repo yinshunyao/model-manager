@@ -96,7 +96,55 @@ class ConfigLoader:
             Dict[str, Any]: 瑞芯微配置字典
         """
         config = self.load_config()
-        return config.get('rockchip', {})
+        rockchip_config = config.get('rockchip', {})
+        
+        # 设置默认值
+        if 'enabled' not in rockchip_config:
+            rockchip_config['enabled'] = False
+            
+        if 'tool_path' not in rockchip_config:
+            rockchip_config['tool_path'] = '/usr/local/rockchip/rknn-toolkit2'
+            
+        if 'params' not in rockchip_config:
+            rockchip_config['params'] = {
+                'default_target_platform': 'rk3588',
+                'supported_platforms': ['rk3566', 'rk3568', 'rk3588', 'rk3562'],
+                'default_precision': 'float32',
+                'supported_precisions': ['float32', 'float16', 'int8'],
+                'rknn_convert_path': '/usr/local/rockchip/rknn-toolkit2/bin/rknn_convert'
+            }
+        
+        return rockchip_config
+    
+    def get_rabbitmq_config(self) -> Dict[str, Any]:
+        """
+        获取RabbitMQ配置
+        
+        Returns:
+            Dict[str, Any]: RabbitMQ配置字典
+        """
+        config = self.load_config()
+        return config.get('rabbitmq', {})
+    
+    def get_rabbitmq_connection_config(self) -> Dict[str, Any]:
+        """
+        获取RabbitMQ连接配置
+        
+        Returns:
+            Dict[str, Any]: RabbitMQ连接配置字典
+        """
+        rabbitmq_config = self.get_rabbitmq_config()
+        return rabbitmq_config.get('connection', {})
+    
+    def get_rabbitmq_queues_config(self) -> Dict[str, Any]:
+        """
+        获取RabbitMQ队列配置
+        
+        Returns:
+            Dict[str, Any]: RabbitMQ队列配置字典
+        """
+        rabbitmq_config = self.get_rabbitmq_config()
+        return rabbitmq_config.get('queues', {})
     
     def get_cambricon_config(self) -> Dict[str, Any]:
         """
@@ -106,7 +154,23 @@ class ConfigLoader:
             Dict[str, Any]: 寒武纪配置字典
         """
         config = self.load_config()
-        return config.get('cambricon', {})
+        cambricon_config = config.get('cambricon', {})
+        
+        # 设置默认值
+        if 'enabled' not in cambricon_config:
+            cambricon_config['enabled'] = False
+            
+        if 'tool_path' not in cambricon_config:
+            cambricon_config['tool_path'] = '/usr/local/cambricon/magicmind/bin'
+            
+        if 'params' not in cambricon_config:
+            cambricon_config['params'] = {
+                'default_precision': 'force_float32',
+                'supported_precisions': ['force_float32', 'force_float16'],
+                'mmconvert_path': '/usr/local/cambricon/magicmind/bin/mmconvert'
+            }
+        
+        return cambricon_config
     
     def get_conversion_config(self) -> Dict[str, Any]:
         """
@@ -127,6 +191,16 @@ class ConfigLoader:
         """
         config = self.load_config()
         return config.get('logging', {})
+    
+    def get_task_center_config(self) -> Dict[str, Any]:
+        """
+        获取任务管理中心配置
+        
+        Returns:
+            Dict[str, Any]: 任务管理中心配置字典
+        """
+        config = self.load_config()
+        return config.get('task_center', {})
     
     def get_config_value(self, key_path: str, default: Any = None) -> Any:
         """

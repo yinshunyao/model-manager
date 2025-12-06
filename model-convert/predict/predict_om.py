@@ -3,7 +3,6 @@ import onnx
 import os
 import subprocess
 from typing import Dict, Optional, Tuple
-
 import cv2
 import numpy as np
 
@@ -37,7 +36,7 @@ class HUAWEI_910B_Predictor:
         # 加载模型
         self._load_model()
         
-    def _load_model(self):
+    def _load_model(self, device_id=0):
         """
         加载OM模型到内存（内部方法）
         """
@@ -62,7 +61,7 @@ class HUAWEI_910B_Predictor:
                 raise RuntimeError(f"ACL初始化失败: {ret}")
             
             # 设置运行模式
-            ret = acl.rt.set_device(0)  # type: ignore
+            ret = acl.rt.set_device(device_id)  # type: ignore
             if ret != 0:
                 raise RuntimeError(f"设置设备失败: {ret}")
             
@@ -87,11 +86,11 @@ class HUAWEI_910B_Predictor:
                 'model_id': model_id,
                 'model_desc': model_desc,
                 'context': context,
-                'device_id': 0,
+                'device_id': device_id,
                 'simulation_mode': False
             }
             
-            print(f"OM模型加载成功: {self.om_model_path}")
+            print(f"OM模型加载成功: {self.om_model_path}, model_id:{model_id}")
             
         except Exception as e:
             # 如果是在非华为设备上运行，保持模拟模式
@@ -129,7 +128,7 @@ class HUAWEI_910B_Predictor:
         
         return img
     
-    def predict(self, image):
+    def predict(self, image, device_id=0):
         """
         目标检测推理
         
@@ -179,40 +178,54 @@ class HUAWEI_910B_Predictor:
                     input_size = acl.mdl.get_input_size_by_index(model_desc, 0)  # type: ignore
                     
                     # 分配输入缓冲区
-                    input_buffer, ret = acl.rt.malloc(input_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    input_buffer, ret = acl.rt.malloc(input_size, 0)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"分配输入缓冲区失败: {ret}")
                     
                     # 复制输入数据到设备
                     ret = acl.rt.memcpy(input_buffer, input_size,  # type: ignore
                                        acl.util.bytes_to_ptr(input_data.tobytes()),  # type: ignore
-                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)  # type: ignore
+                                       input_data.nbytes, 1)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"复制输入数据失败: {ret}")
+
+                    # === 创建输入 Dataset ===
+                    input_dataset = acl.mdl.create_dataset()
+                    input_data_buffer = acl.create_data_buffer(input_buffer, input_size)
+                    acl.mdl.add_dataset_buffer(input_dataset, input_data_buffer)
+
+                    # === 创建输出 Dataset ===
+                    num_outputs = acl.mdl.get_num_outputs(model_desc)
+                    output_dataset = acl.mdl.create_dataset()
+                    output_buffers = []
+                    for i in range(num_outputs):
+                        size = acl.mdl.get_output_size_by_index(model_desc, i)
+                        buf, ret = acl.rt.malloc(size, 0)
+                        if ret != 0:
+                            raise RuntimeError(f"输出 buffer {i} 分配失败")
+                        dbuf = acl.create_data_buffer(buf, size)
+                        acl.mdl.add_dataset_buffer(output_dataset, dbuf)
+                        output_buffers.append((buf, size))
                     
                     # 执行模型推理
-                    ret = acl.mdl.execute(model_id, [input_buffer])  # type: ignore
+                    ret = acl.mdl.execute(model_id, input_dataset, output_dataset)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"执行推理失败: {ret}")
                     
-                    # 获取输出数量
-                    num_outputs = acl.mdl.get_num_outputs(model_desc)  # type: ignore
-                    if num_outputs < 1:
-                        raise RuntimeError("模型没有输出")
-                    
                     # 获取输出大小
-                    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)  # type: ignore
-                    
-                    # 分配输出缓冲区
-                    output_buffer, ret = acl.rt.malloc(output_size, acl.rt.MEMORY_DEVICE)  # type: ignore
-                    if ret != 0:
-                        raise RuntimeError(f"分配输出缓冲区失败: {ret}")
+                    output_buffer, output_size = output_buffers[0]
+                    # output_size = acl.mdl.get_output_size_by_index(model_desc, 0)  # type: ignore
+                    #
+                    # # 分配输出缓冲区
+                    # output_buffer, ret = acl.rt.malloc(output_size, 0)  # type: ignore
+                    # if ret != 0:
+                    #     raise RuntimeError(f"分配输出缓冲区失败: {ret}")
                     
                     # 从设备获取输出
                     output_data = np.zeros(output_size // 4, dtype=np.float32)
                     ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
                                        output_data.nbytes, output_buffer, 
-                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)  # type: ignore
+                                       output_size, 2)  # type: ignore acl.MEMCPY_DEVICE_TO_HOST
                     if ret != 0:
                         raise RuntimeError(f"复制输出数据失败: {ret}")
                     
@@ -224,8 +237,11 @@ class HUAWEI_910B_Predictor:
                     # 假设输出是 [x1, y1, x2, y2, confidence, class_id, class_id, ...] 的格式
                     results = []
                     # 实际解析代码会根据具体模型输出格式进行实现
-                    print("实际推理完成（目标检测）")
-                    return results
+                    print(f"实际推理完成（目标检测）shape:{output_data.shape}, model id:{model_id}, num_outputs:{num_outputs}, num_inputs:{num_inputs}")
+                    for i in range(0, len(output_data), 7):
+                        x1, y1, x2, y2, score, class_id = output_data[i:i+6]
+                        results.append([x1, y1, x2, y2, score, class_id])
+                    return results[:20]
                     
                 except ImportError:
                     # 如果导入失败，回退到模拟模式
@@ -245,14 +261,16 @@ class HUAWEI_910B_Predictor:
                 return results
             
         except Exception as e:
+            logging.warning(f"推理过程中出错: {str(e)}", exc_info=True)
             raise RuntimeError(f"推理过程中出错: {str(e)}")
     
-    def predict_cls(self, image):
+    def predict_cls(self, image, device_id=0):
         """
         图像分类推理
         
         Args:
             image: 输入图像（cv2格式或文件路径）
+            device_id: 设备ID，默认为0
         
         Returns:
             list: 分类结果列表，每个元素为 [class_name, confidence]
@@ -297,40 +315,48 @@ class HUAWEI_910B_Predictor:
                     input_size = acl.mdl.get_input_size_by_index(model_desc, 0)  # type: ignore
                     
                     # 分配输入缓冲区
-                    input_buffer, ret = acl.rt.malloc(input_size, acl.rt.MEMORY_DEVICE)  # type: ignore
+                    input_buffer, ret = acl.rt.malloc(input_size, 0)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"分配输入缓冲区失败: {ret}")
                     
                     # 复制输入数据到设备
                     ret = acl.rt.memcpy(input_buffer, input_size,  # type: ignore
                                        acl.util.bytes_to_ptr(input_data.tobytes()),  # type: ignore
-                                       input_data.nbytes, acl.rt.MEMCPY_HOST_TO_DEVICE)  # type: ignore
+                                       input_data.nbytes, 1)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"复制输入数据失败: {ret}")
+
+                    # === 创建输入 Dataset ===
+                    input_dataset = acl.mdl.create_dataset()
+                    input_data_buffer = acl.create_data_buffer(input_buffer, input_size)
+                    acl.mdl.add_dataset_buffer(input_dataset, input_data_buffer)
+
+                    # === 创建输出 Dataset ===
+                    num_outputs = acl.mdl.get_num_outputs(model_desc)
+                    output_dataset = acl.mdl.create_dataset()
+                    output_buffers = []
+                    for i in range(num_outputs):
+                        size = acl.mdl.get_output_size_by_index(model_desc, i)
+                        buf, ret = acl.rt.malloc(size, 0)
+                        if ret != 0:
+                            raise RuntimeError(f"输出 buffer {i} 分配失败")
+                        dbuf = acl.create_data_buffer(buf, size)
+                        acl.mdl.add_dataset_buffer(output_dataset, dbuf)
+                        output_buffers.append((buf, size))
                     
                     # 执行模型推理
-                    ret = acl.mdl.execute(model_id, [input_buffer])  # type: ignore
+                    ret = acl.mdl.execute(model_id, input_dataset, output_dataset)  # type: ignore
                     if ret != 0:
                         raise RuntimeError(f"执行推理失败: {ret}")
                     
-                    # 获取输出数量
-                    num_outputs = acl.mdl.get_num_outputs(model_desc)  # type: ignore
-                    if num_outputs < 1:
-                        raise RuntimeError("模型没有输出")
-                    
-                    # 获取输出大小
-                    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)  # type: ignore
-                    
-                    # 分配输出缓冲区
-                    output_buffer, ret = acl.rt.malloc(output_size, acl.rt.MEMORY_DEVICE)  # type: ignore
-                    if ret != 0:
-                        raise RuntimeError(f"分配输出缓冲区失败: {ret}")
+                    # 获取输出数据
+                    output_buffer, output_size = output_buffers[0]
                     
                     # 从设备获取输出
                     output_data = np.zeros(output_size // 4, dtype=np.float32)
                     ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
                                        output_data.nbytes, output_buffer, 
-                                       output_size, acl.rt.MEMCPY_DEVICE_TO_HOST)  # type: ignore
+                                       output_size, 2)  # type: ignore acl.MEMCPY_DEVICE_TO_HOST
                     if ret != 0:
                         raise RuntimeError(f"复制输出数据失败: {ret}")
                     
@@ -339,10 +365,28 @@ class HUAWEI_910B_Predictor:
                     acl.rt.free(output_buffer)  # type: ignore
                     
                     # 解析分类结果
-                    # 实际解析代码会根据具体模型输出格式进行实现
+                    # 假设输出是分类概率数组
+                    print(f"实际推理完成（图像分类）:{output_data.tolist()[:10]}")
+                    
+                    # 这里可以根据实际模型的类别列表进行映射
+                    # 以下是一个示例实现，将概率最高的前两个类别作为结果返回
                     results = []
-                    print("实际推理完成（图像分类）")
-                    return results
+                    if len(output_data) > 0:
+                        # 获取概率最高的两个类别索引
+                        top_indices = output_data.argsort()[-2:][::-1]
+                        # 这里使用简单的类别名称映射，实际应用中应替换为模型的真实类别列表
+                        class_names = ['class_0', 'class_1', 'class_2', 'class_3', 'class_4', 
+                                      'class_5', 'class_6', 'class_7', 'class_8', 'class_9']
+                        
+                        for idx in top_indices:
+                            if idx < len(class_names):
+                                class_name = class_names[idx]
+                            else:
+                                class_name = f'class_{idx}'
+                            confidence = float(output_data[idx])
+                            results.append([class_name, confidence])
+                    
+                    return results[:20]
                     
                 except ImportError:
                     # 如果导入失败，回退到模拟模式
@@ -362,6 +406,7 @@ class HUAWEI_910B_Predictor:
                 return results
             
         except Exception as e:
+            logging.warning(f"分类推理过程中出错: {str(e)}", exc_info=True)
             raise RuntimeError(f"分类推理过程中出错: {str(e)}")
     
     def __del__(self):
@@ -540,8 +585,15 @@ def onnx_to_om(
         return False
 
 if __name__ == "__main__":
+    # 修改loggging 打印代码行数
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s [%(filename)s:%(lineno)d]')
     # 当前代码文件夹
     current_dir = os.path.dirname(os.path.abspath(__file__))
+    import sys
+    # 接收参数debug
+    debug = False
+    if len(sys.argv) > 1 and sys.argv[1] == "debug":
+        debug = True
 
     # 示例：使用对象进行推理
     # 注意：这里使用示例模型路径，实际使用时请替换为真实的OM模型路径
@@ -550,7 +602,7 @@ if __name__ == "__main__":
     test_image_path = os.path.join(current_dir, "..", "000000000009.jpg")
     try:
         # 创建预测器实例（开启调试模式）
-        predictor = HUAWEI_910B_Predictor(om_model_path, debug=True)
+        predictor = HUAWEI_910B_Predictor(om_model_path, debug=debug)
         
         # 创建测试图像（使用随机噪声或从文件读取）
         # 方法1：使用随机噪声作为测试图像

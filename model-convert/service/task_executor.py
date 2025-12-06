@@ -159,12 +159,42 @@ class TaskExecutor:
                 # 如果需要上传到MinIO
                 if is_minio_output:
                     try:
-                        # 这里应该添加MinIO上传逻辑
-                        # 暂时只是打印信息
-                        logger.info(f"需要上传到MinIO: {actual_output_path}.om -> {output_path}")
-                        # 实际项目中应该调用MinIO上传函数
-                        # from tools.handle_file_minio import minio_handler
-                        # minio_handler.upload_file(actual_output_path + '.om', output_path)
+                        # 导入MinIO处理模块
+                        from tools.handle_file_minio import minio_handler
+                        
+                        # 确保MinIO处理器已初始化
+                        if minio_handler is None:
+                            from tools.handle_file_minio import init_minio_handler
+                            minio_handler = init_minio_handler()
+                        
+                        if minio_handler is not None:
+                            # 解析MinIO路径
+                            # 格式: minio://bucket_name/object_name
+                            if output_path.startswith('minio://'):
+                                minio_path = output_path[8:]  # 移除'minio://'前缀
+                            else:
+                                minio_path = output_path
+                            
+                            # 分割bucket和object
+                            if '/' in minio_path:
+                                bucket_name, object_name = minio_path.split('/', 1)
+                            else:
+                                # 如果没有指定object名称，使用文件名
+                                bucket_name = minio_path
+                                object_name = os.path.basename(actual_output_path) + '.om'
+                            
+                            # 上传文件到MinIO
+                            local_file_path = actual_output_path + '.om'
+                            success = minio_handler.upload_file(bucket_name, object_name, local_file_path)
+                            
+                            if success:
+                                logger.info(f"成功上传到MinIO: {bucket_name}/{object_name}")
+                            else:
+                                logger.error(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                                raise Exception(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                        else:
+                            logger.error("MinIO处理器初始化失败，无法上传文件")
+                            raise Exception("MinIO处理器初始化失败，无法上传文件")
                     except Exception as e:
                         logger.error(f"上传到MinIO失败: {str(e)}")
                         raise
@@ -178,34 +208,242 @@ class TaskExecutor:
     def execute_rockchip_conversion(self, input_path: str, output_path: str, 
                                    parameters: Optional[Dict[str, Any]] = None) -> bool:
         """
-        执行瑞芯微平台的模型转换（暂未实现）
+        执行瑞芯微平台的模型转换（ONNX转RKNN）
         
         Args:
-            input_path: 输入模型路径
-            output_path: 输出模型路径
+            input_path: 输入ONNX模型路径
+            output_path: 输出RKNN模型路径
             parameters: 转换参数
         
         Returns:
             是否转换成功
         """
-        logger.warning("瑞芯微平台模型转换功能暂未实现")
-        raise NotImplementedError("瑞芯微平台模型转换功能暂未实现")
+        try:
+            # 导入瑞芯微转换模块
+            from convert.onnx_to_rknn import onnx_to_rknn, rknn_available
+            
+            # 检查RKNN Toolkit 2是否安装
+            if not rknn_available:
+                logger.error("RKNN Toolkit 2 未安装，无法执行瑞芯微平台模型转换")
+                raise ImportError("RKNN Toolkit 2 未安装，无法执行瑞芯微平台模型转换")
+            
+            # 验证输入文件存在
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"输入文件不存在: {input_path}")
+            
+            # 确保输出目录存在
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # 准备参数
+            params = parameters.copy() if parameters else {}
+            
+            # 处理特殊情况：如果输出路径是MinIO路径，需要先输出到本地
+            is_minio_output = output_path.startswith('minio://') or 'minio' in output_path.lower()
+            local_output_path = None
+            
+            if is_minio_output:
+                # 创建临时本地输出路径
+                temp_dir = self._create_temp_dir()
+                # 移除可能的.rknn后缀
+                output_filename = os.path.basename(output_path).replace('.rknn', '')
+                local_output_path = os.path.join(temp_dir, output_filename)
+                actual_output_path = local_output_path
+            else:
+                # 本地输出，直接使用
+                # 移除可能的.rknn后缀
+                actual_output_path = output_path.replace('.rknn', '')
+            
+            logger.info(f"开始瑞芯微模型转换: {input_path} -> {actual_output_path}.rknn")
+            logger.info(f"转换参数: {params}")
+            
+            # 获取转换参数
+            input_shape = params.get('input_shape', None)
+            target_platform = params.get('target_platform', 'rk3588')
+            precision_mode = params.get('precision_mode', 'float32')
+            auto_input_shape = params.get('auto_input_shape', True)
+            
+            # 执行转换
+            success = onnx_to_rknn(
+                onnx_model_path=input_path,
+                output_rknn_path=actual_output_path,
+                input_shape=input_shape,
+                target_platform=target_platform,
+                precision_mode=precision_mode,
+                auto_input_shape=auto_input_shape,
+                **params
+            )
+            
+            if success:
+                logger.info(f"瑞芯微模型转换成功: {actual_output_path}.rknn")
+                
+                # 如果需要上传到MinIO
+                if is_minio_output:
+                    try:
+                        # 导入MinIO处理模块
+                        from tools.handle_file_minio import minio_handler
+                        
+                        # 确保MinIO处理器已初始化
+                        if minio_handler is None:
+                            from tools.handle_file_minio import init_minio_handler
+                            minio_handler = init_minio_handler()
+                        
+                        if minio_handler is not None:
+                            # 解析MinIO路径
+                            # 格式: minio://bucket_name/object_name
+                            if output_path.startswith('minio://'):
+                                minio_path = output_path[8:]  # 移除'minio://'前缀
+                            else:
+                                minio_path = output_path
+                            
+                            # 分割bucket和object
+                            if '/' in minio_path:
+                                bucket_name, object_name = minio_path.split('/', 1)
+                            else:
+                                # 如果没有指定object名称，使用文件名
+                                bucket_name = minio_path
+                                object_name = os.path.basename(actual_output_path) + '.rknn'
+                            
+                            # 上传文件到MinIO
+                            local_file_path = actual_output_path + '.rknn'
+                            success = minio_handler.upload_file(bucket_name, object_name, local_file_path)
+                            
+                            if success:
+                                logger.info(f"成功上传到MinIO: {bucket_name}/{object_name}")
+                            else:
+                                logger.error(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                                raise Exception(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                        else:
+                            logger.error("MinIO处理器初始化失败，无法上传文件")
+                            raise Exception("MinIO处理器初始化失败，无法上传文件")
+                    except Exception as e:
+                        logger.error(f"上传到MinIO失败: {str(e)}")
+                        raise
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"瑞芯微模型转换失败: {str(e)}")
+            raise
     
     def execute_cambricon_conversion(self, input_path: str, output_path: str, 
-                                    parameters: Optional[Dict[str, Any]] = None) -> bool:
+                                   parameters: Optional[Dict[str, Any]] = None) -> bool:
         """
-        执行寒武纪平台的模型转换（暂未实现）
+        执行寒武纪平台的模型转换（ONNX转MagicMind）
         
         Args:
-            input_path: 输入模型路径
-            output_path: 输出模型路径
+            input_path: 输入ONNX模型路径
+            output_path: 输出MagicMind模型路径
             parameters: 转换参数
         
         Returns:
             是否转换成功
         """
-        logger.warning("寒武纪平台模型转换功能暂未实现")
-        raise NotImplementedError("寒武纪平台模型转换功能暂未实现")
+        try:
+            # 导入寒武纪转换模块
+            from convert.onnx_to_cambricon import onnx_to_magicmind, magicmind_available, onnx_to_magicmind_cli
+            
+            # 检查MagicMind是否安装
+            if not magicmind_available:
+                logger.error("MagicMind 未安装，无法执行寒武纪平台模型转换")
+                raise ImportError("MagicMind 未安装，无法执行寒武纪平台模型转换")
+            
+            # 验证输入文件存在
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"输入文件不存在: {input_path}")
+            
+            # 确保输出目录存在
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # 准备参数
+            params = parameters.copy() if parameters else {}
+            
+            # 处理特殊情况：如果输出路径是MinIO路径，需要先输出到本地
+            is_minio_output = output_path.startswith('minio://') or 'minio' in output_path.lower()
+            local_output_path = None
+            
+            if is_minio_output:
+                # 创建临时本地输出路径
+                temp_dir = self._create_temp_dir()
+                # 移除可能的.mm后缀
+                output_filename = os.path.basename(output_path).replace('.mm', '')
+                local_output_path = os.path.join(temp_dir, output_filename)
+                actual_output_path = local_output_path
+            else:
+                # 本地输出，直接使用
+                # 移除可能的.mm后缀
+                actual_output_path = output_path.replace('.mm', '')
+            
+            logger.info(f"开始寒武纪模型转换: {input_path} -> {actual_output_path}.mm")
+            logger.info(f"转换参数: {params}")
+            
+            # 获取转换参数
+            input_shape = params.get('input_shape', None)
+            precision_mode = params.get('precision_mode', 'force_float32')
+            
+            # 执行转换
+            success = onnx_to_magicmind(
+                onnx_model_path=input_path,
+                output_mm_path=actual_output_path,
+                input_shape=input_shape,
+                precision_mode=precision_mode,
+                **params
+            )
+            
+            if success:
+                logger.info(f"寒武纪模型转换成功: {actual_output_path}.mm")
+                
+                # 如果需要上传到MinIO
+                if is_minio_output:
+                    try:
+                        # 导入MinIO处理模块
+                        from tools.handle_file_minio import minio_handler
+                        
+                        # 确保MinIO处理器已初始化
+                        if minio_handler is None:
+                            from tools.handle_file_minio import init_minio_handler
+                            minio_handler = init_minio_handler()
+                        
+                        if minio_handler is not None:
+                            # 解析MinIO路径
+                            # 格式: minio://bucket_name/object_name
+                            if output_path.startswith('minio://'):
+                                minio_path = output_path[8:]  # 移除'minio://'前缀
+                            else:
+                                minio_path = output_path
+                            
+                            # 分割bucket和object
+                            if '/' in minio_path:
+                                bucket_name, object_name = minio_path.split('/', 1)
+                            else:
+                                # 如果没有指定object名称，使用文件名
+                                bucket_name = minio_path
+                                object_name = os.path.basename(actual_output_path) + '.mm'
+                            
+                            # 上传文件到MinIO
+                            local_file_path = actual_output_path + '.mm'
+                            success = minio_handler.upload_file(bucket_name, object_name, local_file_path)
+                            
+                            if success:
+                                logger.info(f"成功上传到MinIO: {bucket_name}/{object_name}")
+                            else:
+                                logger.error(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                                raise Exception(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                        else:
+                            logger.error("MinIO处理器初始化失败，无法上传文件")
+                            raise Exception("MinIO处理器初始化失败，无法上传文件")
+                    except Exception as e:
+                        logger.error(f"上传到MinIO失败: {str(e)}")
+                        raise
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"寒武纪模型转换失败: {str(e)}")
+            raise
     
     def execute_yolo_to_onnx_conversion(self, input_path: str, output_path: str, 
                                         parameters: Optional[Dict[str, Any]] = None) -> bool:
@@ -276,12 +514,42 @@ class TaskExecutor:
                 # 如果需要上传到MinIO
                 if is_minio_output:
                     try:
-                        # 这里应该添加MinIO上传逻辑
-                        # 暂时只是打印信息
-                        logger.info(f"需要上传到MinIO: {actual_output_path}.onnx -> {output_path}")
-                        # 实际项目中应该调用MinIO上传函数
-                        # from tools.handle_file_minio import minio_handler
-                        # minio_handler.upload_file(actual_output_path + '.onnx', output_path)
+                        # 导入MinIO处理模块
+                        from tools.handle_file_minio import minio_handler
+                        
+                        # 确保MinIO处理器已初始化
+                        if minio_handler is None:
+                            from tools.handle_file_minio import init_minio_handler
+                            minio_handler = init_minio_handler()
+                        
+                        if minio_handler is not None:
+                            # 解析MinIO路径
+                            # 格式: minio://bucket_name/object_name
+                            if output_path.startswith('minio://'):
+                                minio_path = output_path[8:]  # 移除'minio://'前缀
+                            else:
+                                minio_path = output_path
+                            
+                            # 分割bucket和object
+                            if '/' in minio_path:
+                                bucket_name, object_name = minio_path.split('/', 1)
+                            else:
+                                # 如果没有指定object名称，使用文件名
+                                bucket_name = minio_path
+                                object_name = os.path.basename(actual_output_path) + '.onnx'
+                            
+                            # 上传文件到MinIO
+                            local_file_path = actual_output_path + '.onnx'
+                            success = minio_handler.upload_file(bucket_name, object_name, local_file_path)
+                            
+                            if success:
+                                logger.info(f"成功上传到MinIO: {bucket_name}/{object_name}")
+                            else:
+                                logger.error(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                                raise Exception(f"上传到MinIO失败: {bucket_name}/{object_name}")
+                        else:
+                            logger.error("MinIO处理器初始化失败，无法上传文件")
+                            raise Exception("MinIO处理器初始化失败，无法上传文件")
                     except Exception as e:
                         logger.error(f"上传到MinIO失败: {str(e)}")
                         raise

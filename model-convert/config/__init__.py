@@ -44,6 +44,10 @@ def get_logging_config() -> Dict[str, Any]:
     """获取日志配置"""
     return config_loader.get_logging_config()
 
+def get_task_center_config() -> Dict[str, Any]:
+    """获取任务管理中心配置"""
+    return config_loader.get_task_center_config()
+
 def get_config_value(key_path: str, default: Optional[Any] = None) -> Any:
     """获取指定路径的配置值"""
     return config_loader.get_config_value(key_path, default)
@@ -63,6 +67,7 @@ __all__ = [
     'get_cambricon_config',
     'get_conversion_config',
     'get_logging_config',
+    'get_task_center_config',
     'get_config_value',
     'reload_config'
 ]

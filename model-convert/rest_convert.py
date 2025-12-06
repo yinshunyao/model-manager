@@ -45,6 +45,8 @@ from service.task_api import (
     pause_task,
     resume_task,
     delete_tasks_batch,
+    complete_task,
+    cancel_task,
     SUPPORTED_PLATFORMS,
     TASK_TYPES,
     TASK_STATUS
@@ -98,7 +100,7 @@ class ModelConvertRequest(BaseModel):
     input_model_path: str = Field(..., description="输入模型路径（支持本地路径或MinIO路径格式bucket/object）")
     output_model_path: str = Field(..., description="输出模型路径（支持本地路径或MinIO路径格式bucket/object）")
     platform: str = Field(..., description="目标平台，可选值: ascend, rockchip, cambricon")
-    model_type: str = Field(..., description="模型类型，如: onnx, pytorch等")
+    type_: str = Field(..., alias="type", description="模型类型，如: onnx, pytorch等")
     params: Optional[Dict[str, Any]] = Field(None, description="平台特定参数")
 
 
@@ -231,14 +233,62 @@ async def convert_to_rockchip(request: ModelConvertRequest):
 @app.post("/convert/cambricon", response_model=BaseResponse, summary="寒武纪平台模型转换")
 async def convert_to_cambricon(request: ModelConvertRequest):
     """
-    寒武纪平台模型转换接口（预留）
-    注意：此功能暂未实现
+    寒武纪平台模型转换接口
+    
+    - **input_model_path**: 输入ONNX模型路径（支持本地路径或MinIO路径格式bucket/object）
+    - **output_model_path**: 输出MagicMind模型路径
+    - **input_shape**: 模型输入形状，可选参数
+    - **precision_mode**: 精度模式，默认为force_float32
+    - **extra_params**: 额外的转换工具参数
     """
-    return BaseResponse(
-        success=False,
-        message="寒武纪平台模型转换功能暂未实现",
-        data={"platform": "cambricon", "status": "not_implemented"}
-    )
+    try:
+        # 构建转换参数
+        parameters = {
+            "precision_mode": request.precision_mode or "force_float32"
+        }
+        
+        # 处理输入形状
+        if request.input_shape is not None:
+            parameters["input_shape"] = request.input_shape
+        
+        # 添加额外参数
+        if request.extra_params:
+            parameters.update(request.extra_params)
+        
+        # 调用任务管理API创建转换任务
+        task_id = create_generic_conversion_task(
+            task_type="onnx_to_magicmind",
+            platform="cambricon",
+            input_path=request.input_model_path,
+            output_path=request.output_model_path,
+            parameters=parameters
+        )
+        
+        if task_id:
+            return BaseResponse(
+                success=True,
+                message=f"寒武纪平台模型转换任务创建成功",
+                data={
+                    "task_id": task_id,
+                    "platform": "cambricon",
+                    "input_path": request.input_model_path,
+                    "output_path": request.output_model_path
+                }
+            )
+        else:
+            return BaseResponse(
+                success=False,
+                message="寒武纪平台模型转换任务创建失败",
+                data={"platform": "cambricon"}
+            )
+            
+    except Exception as e:
+        logger.error(f"寒武纪平台模型转换接口异常: {str(e)}")
+        return BaseResponse(
+            success=False,
+            message=f"寒武纪平台模型转换接口异常: {str(e)}",
+            data={"platform": "cambricon"}
+        )
 
 
 @app.post("/convert", response_model=BaseResponse, summary="通用模型转换接口")
@@ -493,6 +543,13 @@ class TaskControlRequest(BaseModel):
     task_id: str = Field(..., description="任务ID")
 
 
+# 任务完成请求模型
+class TaskCompleteRequest(BaseModel):
+    task_id: str = Field(..., description="任务ID")
+    error_message: Optional[str] = Field(None, description="错误信息（如果任务失败）")
+    log_path: Optional[str] = Field(None, description="日志文件路径")
+
+
 @app.post("/tasks/pause", response_model=BaseResponse, summary="暂停任务")
 async def pause_task_api(request: TaskControlRequest):
     """
@@ -555,6 +612,77 @@ async def resume_task_api(request: TaskControlRequest):
     except Exception as e:
         logger.error(f"恢复任务失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"恢复任务失败: {str(e)}")
+
+
+@app.post("/tasks/complete", response_model=BaseResponse, summary="完成任务")
+async def complete_task_api(request: TaskCompleteRequest):
+    """
+    完成任务（标记为成功或失败）
+    
+    - **task_id**: 任务ID（必选）
+    - **error_message**: 错误信息（可选，如果提供则标记为失败）
+    - **log_path**: 日志文件路径（可选）
+    """
+    try:
+        logger.info(f"完成任务: {request.task_id}")
+        
+        # 完成任务
+        success = complete_task(
+            task_id=request.task_id,
+            error_message=request.error_message,
+            log_path=request.log_path
+        )
+        
+        if success:
+            status = "failed" if request.error_message else "completed"
+            return BaseResponse(
+                success=True,
+                message=f"任务已完成，状态: {status}",
+                data={"task_id": request.task_id, "status": status}
+            )
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="任务完成失败：任务不存在或当前状态不允许完成"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"完成任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"完成任务失败: {str(e)}")
+
+
+@app.post("/tasks/cancel", response_model=BaseResponse, summary="取消任务")
+async def cancel_task_api(request: TaskControlRequest):
+    """
+    取消等待执行的任务
+    
+    - **task_id**: 任务ID（必选）
+    """
+    try:
+        logger.info(f"取消任务: {request.task_id}")
+        
+        # 取消任务
+        success = cancel_task(request.task_id)
+        
+        if success:
+            return BaseResponse(
+                success=True,
+                message="任务已取消",
+                data={"task_id": request.task_id, "status": "failed"}
+            )
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="任务取消失败：任务不存在或当前状态不允许取消"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"取消任务失败: {str(e)}")
 
 
 def process_model_file(file_path: str) -> str:

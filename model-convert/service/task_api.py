@@ -177,6 +177,27 @@ def cancel_task(task_id: str) -> bool:
         logger.error(f"取消任务失败: {str(e)}")
         raise
 
+def complete_task(task_id: str, error_message: Optional[str] = None, 
+                 log_path: Optional[str] = None) -> bool:
+    """
+    完成任务（标记为成功或失败）
+    
+    Args:
+        task_id: 任务ID
+        error_message: 错误信息（可选，如果提供则标记为失败）
+        log_path: 日志路径（可选）
+    
+    Returns:
+        是否完成成功
+    """
+    try:
+        task_manager = get_task_manager()
+        success = task_manager.complete_task(task_id, error_message, log_path)
+        return success
+    except Exception as e:
+        logger.error(f"完成任务失败: {str(e)}")
+        raise
+
 def delete_task(task_id: str) -> bool:
     """
     删除任务

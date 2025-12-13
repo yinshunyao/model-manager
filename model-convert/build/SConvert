@@ -1,0 +1,15 @@
+[program:mconv]
+# directory=/home/model-convert
+command=/root/.convert/bin/python -m rest_convert
+autostart=false
+autorestart=true
+stopasgroup=true
+killasgroup=true
+priority=10
+user=root
+redirect_stderr=true
+startretries=99999
+stdout_logfile=%(here)s/../log/%(program_name)s.std
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=50
+; 转换任务接口: 支持任务管理和状态维护

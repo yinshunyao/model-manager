@@ -1,3 +1,4 @@
+import logging
 import os
 import argparse
 import sys
@@ -6,20 +7,20 @@ import sys
 try:
     import torch
 except ImportError:
-    print("错误: 未安装torch。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 try:
     import numpy as np
 except ImportError:
-    print("错误: 未安装numpy。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 try:
     from ultralytics import YOLO
 except ImportError:
-    print("错误: 未安装ultralytics。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 
 def convert_yolo11_to_onnx(model_path, output_path=None, imgsz=640, simplify=False, opset_version=17):

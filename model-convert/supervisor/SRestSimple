@@ -1,0 +1,15 @@
+[program:rest]
+;directory=/root/miniconda3/convert
+command=python -m rest_simple.rest_predict_910b
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+priority=10
+user=root
+redirect_stderr=true
+startretries=99999
+stdout_logfile=%(here)s/../log/%(program_name)s.std
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=50
+; 转换任务接口: 支持任务管理和状态维护

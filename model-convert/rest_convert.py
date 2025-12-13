@@ -729,7 +729,7 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     # 从配置文件获取端口
     server_config = config_loader.get_server_config()
-    port = server_config.get('port', 8000)
+    port = server_config.get('port', 38000)
     
     # 启动服务
     uvicorn.run(

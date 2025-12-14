@@ -6,6 +6,7 @@
 # @Detail  : 华为910b平台推理和模型转换服务
 # @Software: PyCharm
 import os
+import shutil
 import sys
 import tempfile
 
@@ -66,11 +67,11 @@ CALLBACK_URL = config_loader.get_config_value("callback.url", "http://localhost:
 class PredictRequest(BaseModel):
     task_id: int
     model_id: int
-    model_type: str
-    platform: str
-    source_file: str
-    model_file: str
-    onnx_file: str
+    model_type: Optional[str] = None
+    platform: Optional[str] = None
+    source_file: Optional[str] = None
+    model_file: Optional[str] = None
+    onnx_file: Optional[str] = None
     engine_file: Optional[str] = None
 
     def _convert_path(self, bucket_name: str, object_name: str):
@@ -103,19 +104,16 @@ class PredictRequest(BaseModel):
 class CallbackRequest(BaseModel):
     task_id: int
     model_id: int
-    result: str
-    target_file: str
+    platform: str
+    result: Optional[str] = None
+    target_file: Optional[str] = None
     engine_file: Optional[str] = None
-    platform: str = "Huawei"
-
-    # def clear_bucket(self):
-    #     self.target_file = self.target_file.replace(BUCKET_TARGET+"/", "")
-    #     self.engine_file = self.engine_file.replace(BUCKET_ENGINE+"/", "")
 
 
 async def send_callback(callback_data: dict):
     """发送回调请求到远程接口"""
     try:
+        logger.warning(f"callback_data:{callback_data}")
         async with httpx.AsyncClient() as client:
             response = await client.post(CALLBACK_URL, json=callback_data, timeout=30.0)
             logger.info(f"回调请求发送成功，状态码: {response.status_code}")
@@ -125,7 +123,7 @@ async def send_callback(callback_data: dict):
         return False
 
 
-def process_minio_file(file_path: str) -> tuple[str, bool]:
+def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
     """
     处理MinIO文件路径，如果是MinIO路径则下载到本地临时文件
     
@@ -138,29 +136,39 @@ def process_minio_file(file_path: str) -> tuple[str, bool]:
     # 确保MinIO处理器已初始化
     if minio_handler is None:
         init_minio_handler()
-    
-    # 判断是否是MinIO路径格式 (bucket/object)
-    if minio_handler and '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
-        try:
-            # 解析bucket和object
-            bucket_name, object_name = file_path.split('/', 1)
-            
-            # 创建临时文件
-            fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(object_name)[1])
-            os.close(fd)
-            
-            # 从MinIO下载文件
-            if minio_handler.download_file(bucket_name, object_name, temp_path):
-                logger.info(f"成功从MinIO下载文件: {bucket_name}/{object_name} -> {temp_path}")
-                return temp_path, True
-            else:
-                raise ValueError(f"从MinIO下载文件失败: {file_path}")
-        except Exception as e:
-            logger.error(f"处理MinIO文件失败: {str(e)}")
-            raise
+
+    filename = os.path.basename(file_path)
+
+    # 如果/开头
+    if file_path.startswith('/'):
+        logger.warning(f"输入文件路径是本地路径 {file_path}")
+        fd, temp_path = tempfile.mkstemp(suffix=filename)
+        os.close(fd)
+        # 复制到temp_path
+        shutil.copy(file_path, temp_path)
+        return temp_path, True
+
+    # file_path = os.path.join(bucket_name, file_path)
+
+    # 判断是否是MinIO路径格式 (bucket/object)，其余均为minio
+    # if minio_handler and '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
+    try:
+        # 创建临时文件
+        fd, temp_path = tempfile.mkstemp(suffix=filename)
+        os.close(fd)
+
+        # 从MinIO下载文件
+        if minio_handler.download_file(bucket_name, file_path, temp_path):
+            logger.info(f"成功从MinIO下载文件: {bucket_name}/{file_path} -> {temp_path}")
+            return temp_path, True
+        else:
+            raise ValueError(f"从MinIO下载文件失败: {bucket_name} {file_path}")
+    except Exception as e:
+        logger.error(f"处理MinIO文件失败: {str(e)}")
+        raise
     
     # 本地文件直接返回
-    return file_path, False
+    # return file_path, False
 
 
 def cleanup_temp_file(file_path: str, is_minio_file: bool):
@@ -173,11 +181,11 @@ def cleanup_temp_file(file_path: str, is_minio_file: bool):
             logger.error(f"清理临时文件失败: {str(e)}")
 
 
-def run_inference(engine_file: str, source_file: str, target_file: str) -> Union[bool, dict]:
+def run_inference(engine_file: str, source_file: str, target_file: str, bucket_name: str) -> Union[bool, dict]:
     """执行推理任务"""
     # 处理MinIO文件
-    local_engine_file, is_engine_minio = process_minio_file(engine_file)
-    local_source_file, is_source_minio = process_minio_file(source_file)
+    local_engine_file, is_engine_minio = process_minio_file(engine_file, bucket_name)
+    local_source_file, is_source_minio = process_minio_file(source_file, bucket_name)
     
     try:
         # 初始化预测器
@@ -209,10 +217,10 @@ def run_inference(engine_file: str, source_file: str, target_file: str) -> Union
         cleanup_temp_file(local_source_file, is_source_minio)
 
 
-def run_conversion(onnx_file: str, om_file: str) -> bool:
+def run_conversion(onnx_file: str, om_file: str, bucket_name: str) -> bool:
     """执行模型转换任务"""
     # 处理MinIO文件
-    local_onnx_file, is_onnx_minio = process_minio_file(onnx_file)
+    local_onnx_file, is_onnx_minio = process_minio_file(onnx_file, bucket_name)
     
     try:
         # 调用onnx_to_om函数进行转换
@@ -222,7 +230,7 @@ def run_conversion(onnx_file: str, om_file: str) -> bool:
             onnx_model_path=local_onnx_file,
             output_om_path=om_file,
             auto_input_shape=True,
-            soc_version=config_loader.get_config_value("ascend.soc_version", "Ascend910B"),
+            soc_version=config_loader.get_config_value("ascend.soc_version", "Ascend910B2"),
             precision_mode=config_loader.get_config_value("ascend.precision_mode", "allow_fp32_to_fp16"),
             log_level=config_loader.get_config_value("ascend.log_level", "info")
         )
@@ -289,11 +297,12 @@ async def process_task(request: PredictRequest):
     callback_data = {
         "task_id": request.task_id,
         "model_id": request.model_id,
+        "platform": request.platform or "",
         "result": "",
         "target_file": "",
-        "engine_file": request.engine_file,
-        "platform": request.platform,
+        "engine_file": request.engine_file or "",
     }
+    # CallbackRequest(**callback_data)
     
     try:
         if request.engine_file:
@@ -304,7 +313,7 @@ async def process_task(request: PredictRequest):
             target_file = f"/tmp/result_{request.task_id}.jpg"
             
             # 执行推理
-            result = run_inference(request.engine_file_bucket, request.source_file_bucket, target_file)
+            result = run_inference(request.engine_file, request.source_file_bucket, target_file, bucket_name=BUCKET_ENGINE)
             
             if result:
                 # 如果source_file是MinIO路径，将结果上传到相同的bucket
@@ -342,7 +351,7 @@ async def process_task(request: PredictRequest):
             om_file = f"/tmp/model_{request.task_id}"
             
             # 执行转换
-            success = run_conversion(request.onnx_file_bucket, om_file)
+            success = run_conversion(request.onnx_file, om_file, bucket_name=BUCKET_ONNX)
 
             # 工具会自动添加后缀
             om_file = f"{om_file}.om"
@@ -364,7 +373,7 @@ async def process_task(request: PredictRequest):
                         bucket_name = BUCKET_ENGINE
                         # 生成OM文件名
                         om_object_name = request.model_file.replace('.onnx', '.om') if '.onnx' in request.model_file else f"{request.model_file}.om"
-                        final_om_file = upload_to_minio_if_needed(om_file, f"{bucket_name}/{om_object_name}")
+                        # final_om_file = upload_to_minio_if_needed(om_file, f"{bucket_name}/{om_object_name}")
                         callback_data.update({
                             "result": "转换成功",
                             "engine_file": om_object_name
@@ -390,7 +399,7 @@ async def process_task(request: PredictRequest):
         await send_callback(callback_data)
         
     except Exception as e:
-        logger.error(f"任务处理过程中出现异常: {str(e)}")
+        logger.error(f"任务处理过程中出现异常: {str(e)}", exc_info=True)
         callback_data.update({
             "result": f"任务执行异常: {str(e)}",
             "target_file": "",

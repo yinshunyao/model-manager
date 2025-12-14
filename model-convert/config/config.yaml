@@ -56,7 +56,7 @@ server:
 # 华为昇腾配置
 ascend:
   # 目标芯片版本
-  soc_version: "Ascend910B"
+  soc_version: "Ascend910B2"
   # 精度模式
   precision_mode: "allow_fp32_to_fp16"
   # ATC工具路径
@@ -142,5 +142,5 @@ task_center:
 # 回调配置
 callback:
   # 回调接口地址
-  # url: "http://8.137.18.24:38000/api/predict/callback"
-  url: "http://127.0.0.1:38000/api/predict/callback"
+   url: "http://125.77.155.10:3007/api/predict/callback"
+#  url: "http://127.0.0.1:38000/api/predict/callback"

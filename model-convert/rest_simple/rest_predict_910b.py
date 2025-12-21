@@ -5,11 +5,22 @@
 # @Email   : shunyaoyin@xxx.com
 # @Detail  : 华为910b平台推理和模型转换服务
 # @Software: PyCharm
+import logging
+# 配置日志，包含文件名和行号信息
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+)
+logger = logging.getLogger(__name__)
 import os
 import shutil
+import threading
+
 import sys
 import tempfile
 
+
+acl_lock = threading.RLock()
 # 添加项目根目录和model-convert目录到Python路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 model_convert_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +33,7 @@ if config_path not in sys.path:
     sys.path.insert(0, config_path)
 
 # 手动设置昇腾环境变量（路径替换为实际值，参考终端中env的输出）
+# 必须在导入predict_om之前设置，因为predict_om中会尝试导入acl模块
 os.environ["ASCEND_HOME"] = "/usr/local/Ascend/ascend-toolkit/8.0.0"
 os.environ["LD_LIBRARY_PATH"] = (
     f"{os.environ['ASCEND_HOME']}/lib64:"
@@ -29,11 +41,16 @@ os.environ["LD_LIBRARY_PATH"] = (
     f"{os.environ.get('LD_LIBRARY_PATH', '')}"
 )
 os.environ["PATH"] = f"{os.environ['ASCEND_HOME']}/bin:{os.environ.get('PATH', '')}"
+
+# 设置PYTHONPATH，确保可以导入acl模块
+ascend_python_path = f"{os.environ['ASCEND_HOME']}/python/site-packages"
+if ascend_python_path not in sys.path:
+    sys.path.insert(0, ascend_python_path)
 os.environ["PYTHONPATH"] = (
-    f"{os.environ['ASCEND_HOME']}/python/site-packages:"
+    f"{ascend_python_path}:"
     f"{os.environ.get('PYTHONPATH', '')}"
 )
-import logging
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Union
@@ -43,16 +60,12 @@ from config.config_loader import config_loader
 
 from predict.predict_om import HUAWEI_910B_Predictor
 from convert.onnx_to_om import onnx_to_om
-import cv2
 
 # 导入MinIO处理模块
 from tools.handle_file_minio import minio_handler, init_minio_handler
 
 from rest_simple.utils import draw_detection_results, BUCKET_ENGINE, BUCKET_ONNX, BUCKET_SOURCE, BUCKET_MODEL, BUCKET_TARGET
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="华为910b平台推理和模型转换服务",
@@ -115,7 +128,7 @@ async def send_callback(callback_data: dict):
     try:
         logger.warning(f"callback_data:{callback_data}")
         async with httpx.AsyncClient() as client:
-            response = await client.post(CALLBACK_URL, json=callback_data, timeout=30.0)
+            response = await client.post(CALLBACK_URL, json=callback_data, timeout=5.0)
             logger.info(f"回调请求发送成功，状态码: {response.status_code}")
             return True
     except Exception as e:
@@ -123,12 +136,16 @@ async def send_callback(callback_data: dict):
         return False
 
 
-def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
+def process_minio_file(file_path: str, bucket_name: str = None) -> tuple[str, bool]:
     """
     处理MinIO文件路径，如果是MinIO路径则下载到本地临时文件
     
     Args:
-        file_path: 输入文件路径，可以是本地路径或MinIO路径格式(bucket/object)
+        file_path: 输入文件路径，可以是：
+                  - 本地路径（以/开头）
+                  - MinIO路径格式(bucket/object)，如 "source-file/1-car.jpeg"
+                  - 对象名称（需要提供bucket_name）
+        bucket_name: 如果file_path只是对象名称，需要提供bucket名称
         
     Returns:
         tuple: (本地文件路径, 是否为MinIO文件)
@@ -139,7 +156,7 @@ def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
 
     filename = os.path.basename(file_path)
 
-    # 如果/开头
+    # 如果/开头，是本地路径
     if file_path.startswith('/'):
         logger.warning(f"输入文件路径是本地路径 {file_path}")
         fd, temp_path = tempfile.mkstemp(suffix=filename)
@@ -148,27 +165,48 @@ def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
         shutil.copy(file_path, temp_path)
         return temp_path, True
 
-    # file_path = os.path.join(bucket_name, file_path)
+    # 判断是否是MinIO路径格式 (bucket/object)
+    # 如果包含/且不是绝对路径，可能是bucket/object格式
+    if '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
+        try:
+            # 解析bucket和object
+            parts = file_path.split('/', 1)
+            actual_bucket_name = parts[0]
+            object_name = parts[1]
+            
+            # 创建临时文件
+            fd, temp_path = tempfile.mkstemp(suffix=os.path.basename(object_name))
+            os.close(fd)
 
-    # 判断是否是MinIO路径格式 (bucket/object)，其余均为minio
-    # if minio_handler and '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
-    try:
-        # 创建临时文件
-        fd, temp_path = tempfile.mkstemp(suffix=filename)
-        os.close(fd)
-
-        # 从MinIO下载文件
-        if minio_handler.download_file(bucket_name, file_path, temp_path):
-            logger.info(f"成功从MinIO下载文件: {bucket_name}/{file_path} -> {temp_path}")
-            return temp_path, True
-        else:
-            raise ValueError(f"从MinIO下载文件失败: {bucket_name} {file_path}")
-    except Exception as e:
-        logger.error(f"处理MinIO文件失败: {str(e)}")
-        raise
+            # 从MinIO下载文件
+            if minio_handler.download_file(actual_bucket_name, object_name, temp_path):
+                logger.info(f"成功从MinIO下载文件: {actual_bucket_name}/{object_name} -> {temp_path}")
+                return temp_path, True
+            else:
+                raise ValueError(f"从MinIO下载文件失败: {actual_bucket_name}/{object_name}")
+        except Exception as e:
+            logger.error(f"处理MinIO文件失败: {str(e)}")
+            raise
     
-    # 本地文件直接返回
-    # return file_path, False
+    # 如果只是对象名称，使用提供的bucket_name
+    if bucket_name:
+        try:
+            # 创建临时文件
+            fd, temp_path = tempfile.mkstemp(suffix=filename)
+            os.close(fd)
+
+            # 从MinIO下载文件
+            if minio_handler.download_file(bucket_name, file_path, temp_path):
+                logger.info(f"成功从MinIO下载文件: {bucket_name}/{file_path} -> {temp_path}")
+                return temp_path, True
+            else:
+                raise ValueError(f"从MinIO下载文件失败: {bucket_name}/{file_path}")
+        except Exception as e:
+            logger.error(f"处理MinIO文件失败: {str(e)}")
+            raise
+    
+    # 如果既不是bucket/object格式，也没有提供bucket_name，报错
+    raise ValueError(f"无法处理文件路径: {file_path}，需要提供bucket_name或使用bucket/object格式")
 
 
 def cleanup_temp_file(file_path: str, is_minio_file: bool):
@@ -184,15 +222,22 @@ def cleanup_temp_file(file_path: str, is_minio_file: bool):
 def run_inference(engine_file: str, source_file: str, target_file: str, bucket_name: str) -> Union[bool, dict]:
     """执行推理任务"""
     # 处理MinIO文件
+    # engine_file 从 BUCKET_ENGINE 下载
     local_engine_file, is_engine_minio = process_minio_file(engine_file, bucket_name)
-    local_source_file, is_source_minio = process_minio_file(source_file, bucket_name)
+    # source_file 可能是 bucket/object 格式，process_minio_file 会自动解析
+    local_source_file, is_source_minio = process_minio_file(source_file)
     
+    predictor = None
     try:
         # 初始化预测器
         predictor = HUAWEI_910B_Predictor(om_model_path=local_engine_file)
         
         # 执行推理
-        result = predictor.predict(image=local_source_file)
+        with acl_lock:
+            result = predictor.predict(image=local_source_file)
+            # 先释放资源
+            predictor.release()
+            predictor = None
         
         # 绘制检测结果并保存
         drawn_target_file = draw_detection_results(
@@ -209,9 +254,17 @@ def run_inference(engine_file: str, source_file: str, target_file: str, bucket_n
         # 返回推理结果，供回调使用
         return result
     except Exception as e:
-        logger.error(f"推理任务执行失败: {str(e)}")
+        logger.error(f"推理任务执行失败: {str(e)}", exc_info=True)
         return False
     finally:
+        # 确保释放predictor资源
+        if predictor is not None:
+            try:
+                predictor.release()
+                logger.info("Predictor资源已释放")
+            except Exception as e:
+                logger.error(f"释放Predictor资源失败: {str(e)}", exc_info=True)
+        
         # 清理临时文件
         cleanup_temp_file(local_engine_file, is_engine_minio)
         cleanup_temp_file(local_source_file, is_source_minio)
@@ -226,14 +279,15 @@ def run_conversion(onnx_file: str, om_file: str, bucket_name: str) -> bool:
         # 调用onnx_to_om函数进行转换
         # 传递额外的参数以确保转换成功
         # 传入的output，实际输出是会添加.om
-        success = onnx_to_om(
-            onnx_model_path=local_onnx_file,
-            output_om_path=om_file,
-            auto_input_shape=True,
-            soc_version=config_loader.get_config_value("ascend.soc_version", "Ascend910B2"),
-            precision_mode=config_loader.get_config_value("ascend.precision_mode", "allow_fp32_to_fp16"),
-            log_level=config_loader.get_config_value("ascend.log_level", "info")
-        )
+        with acl_lock:
+            success = onnx_to_om(
+                onnx_model_path=local_onnx_file,
+                output_om_path=om_file,
+                auto_input_shape=True,
+                soc_version=config_loader.get_config_value("ascend.soc_version", "Ascend910B2"),
+                precision_mode=config_loader.get_config_value("ascend.precision_mode", "allow_fp32_to_fp16"),
+                log_level=config_loader.get_config_value("ascend.log_level", "info")
+            )
 
         om_file = f"{om_file}.om"
         # 检查生成的OM文件是否存在

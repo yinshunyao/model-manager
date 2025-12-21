@@ -35,3 +35,19 @@ onnx模型可以使用 yolo11n.onnx 或者 9-yolo11n.onnx
   "engine_file": ""
 }
 ```
+
+
+## 推理
+```json
+ {
+"task_id": 4,
+  "model_id": 2,
+  "model_type": "yolo",
+  "platform": "Huawei",
+  "source_file1": "/root/miniconda3/convert/predict/../000000000025.jpg",
+  "source_file": "000000000025.jpg",
+  "model_file": "model2",
+  "onnx_file": "/root/miniconda3/convert/predict/../model_demo/yolo11n.onnx",
+  "engine_file": "/root/miniconda3/convert/predict/../model_demo/yolo11n.nonms.om"
+}
+```

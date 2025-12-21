@@ -63,17 +63,18 @@ def is_yolov8_format(output_data):
     return False, None, None
 
 
-def postprocess_yolov8(output_data, img_shape, conf_thres=0.25, iou_thres=0.7, num_boxes=None, num_classes=None):
+def postprocess_yolov8(output_data, img_shape, conf_thres=0.25, iou_thres=0.7, num_boxes=None, num_classes=None, model_input_shape=(640, 640)):
     """
     处理YOLOv8格式的输出数据
     
     Args:
         output_data: np.ndarray，输出数据，可以是任意形状，会自动展平
-        img_shape: (H, W) of original image
+        img_shape: (H, W) of original image，原始图像尺寸
         conf_thres: 置信度阈值
         iou_thres: IoU阈值
         num_boxes: 检测框数量，如果为None则自动推断
         num_classes: 类别数量，如果为None则自动推断
+        model_input_shape: (W, H) 模型输入尺寸，默认(640, 640)，用于坐标转换
     
     Returns:
         list: 检测结果列表，每个元素为 [x1, y1, x2, y2, confidence, class_id]
@@ -109,7 +110,7 @@ def postprocess_yolov8(output_data, img_shape, conf_thres=0.25, iou_thres=0.7, n
             f"实际 {total_size}"
         )
     
-    logging.info(f"处理YOLOv8输出: num_boxes={num_boxes}, num_classes={num_classes}, img_shape={img_shape}")
+    logging.info(f"处理YOLOv8输出: num_boxes={num_boxes}, num_classes={num_classes}, img_shape={img_shape}, model_input_shape={model_input_shape}")
     
     # Step 1: reshape to [4+num_classes, num_boxes]
     output = output_data.reshape(4 + num_classes, num_boxes)
@@ -120,6 +121,11 @@ def postprocess_yolov8(output_data, img_shape, conf_thres=0.25, iou_thres=0.7, n
     # Step 3: split box and class confs
     boxes = output[:, :4]  # [x, y, w, h] (center + wh, normalized)
     class_confs = output[:, 4:]  # (num_boxes, num_classes)
+    
+    # 调试：检查坐标范围
+    if len(boxes) > 0:
+        sample_box = boxes[0]
+        logging.debug(f"样本坐标值: x={sample_box[0]:.6f}, y={sample_box[1]:.6f}, w={sample_box[2]:.6f}, h={sample_box[3]:.6f}")
     
     # Step 4: get max class conf and id
     max_conf = np.max(class_confs, axis=1)  # (num_boxes,)
@@ -135,16 +141,61 @@ def postprocess_yolov8(output_data, img_shape, conf_thres=0.25, iou_thres=0.7, n
         return []
     
     # Step 6: convert [x, y, w, h] (normalized center+wh) to [x1, y1, x2, y2] (pixel)
-    img_h, img_w = img_shape
-    x_center = boxes[:, 0]
-    y_center = boxes[:, 1]
-    w = boxes[:, 2]
-    h = boxes[:, 3]
+    # YOLOv8输出的坐标是归一化的（0-1之间），基于模型输入尺寸
+    # 需要先转换为模型输入尺寸的像素坐标，然后缩放到原始图像尺寸
     
-    x1 = x_center - w / 2
-    y1 = y_center - h / 2
-    x2 = x_center + w / 2
-    y2 = y_center + h / 2
+    # 原始图像尺寸 (H, W)
+    orig_h, orig_w = img_shape
+    # 模型输入尺寸 (W, H) - cv2.resize使用的是(width, height)格式
+    model_w, model_h = model_input_shape
+    
+    # 归一化坐标（0-1之间）
+    x_center_norm = boxes[:, 0]  # 归一化的中心x坐标
+    y_center_norm = boxes[:, 1]  # 归一化的中心y坐标
+    w_norm = boxes[:, 2]          # 归一化的宽度
+    h_norm = boxes[:, 3]          # 归一化的高度
+    
+    # 检查坐标范围，判断是否是归一化坐标
+    max_val = max(np.max(x_center_norm), np.max(y_center_norm), np.max(w_norm), np.max(h_norm))
+    min_val = min(np.min(x_center_norm), np.min(y_center_norm), np.min(w_norm), np.min(h_norm))
+    
+    # 如果坐标值在0-1之间，认为是归一化坐标；否则认为是像素坐标
+    if max_val <= 1.0 and min_val >= 0.0:
+        # 归一化坐标，转换为模型输入尺寸的像素坐标
+        logging.debug("检测到归一化坐标，进行转换")
+        x_center = x_center_norm * model_w
+        y_center = y_center_norm * model_h
+        w = w_norm * model_w
+        h = h_norm * model_h
+    else:
+        # 已经是像素坐标，直接使用（可能是基于模型输入尺寸的像素坐标）
+        logging.warning(f"检测到非归一化坐标，最大值: {max_val:.2f}，最小值: {min_val:.2f}，假设已经是模型输入尺寸的像素坐标")
+        x_center = x_center_norm
+        y_center = y_center_norm
+        w = w_norm
+        h = h_norm
+    
+    # 转换为边界框坐标 (x1, y1, x2, y2)
+    x1_model = x_center - w / 2
+    y1_model = y_center - h / 2
+    x2_model = x_center + w / 2
+    y2_model = y_center + h / 2
+    
+    # 计算缩放比例（从模型输入尺寸缩放到原始图像尺寸）
+    scale_x = orig_w / model_w
+    scale_y = orig_h / model_h
+    
+    # 缩放到原始图像尺寸
+    x1 = x1_model * scale_x
+    y1 = y1_model * scale_y
+    x2 = x2_model * scale_x
+    y2 = y2_model * scale_y
+    
+    # 裁剪坐标到图像范围内
+    x1 = np.clip(x1, 0, orig_w)
+    y1 = np.clip(y1, 0, orig_h)
+    x2 = np.clip(x2, 0, orig_w)
+    y2 = np.clip(y2, 0, orig_h)
     
     # Step 7: apply NMS (you need torchvision or custom NMS)
     try:

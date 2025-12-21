@@ -119,7 +119,7 @@
    # 运行 ONNX 模型推理
    predict_onnx(
        model_path="output/yolo11n.onnx",
-       image_path="dataset/coco8/images/train2017/000000000009.jpg",
+       image_path="model-convert-data/dataset/coco8/images/train2017/000000000009.jpg",
        output_path="output/detection_result.jpg",
        task_type="detect"
    )
@@ -132,7 +132,7 @@
    # 运行 OM 模型推理
    predict_om(
        model_path="output/yolo11n.om",
-       image_path="dataset/coco8/images/train2017/000000000009.jpg",
+       image_path="model-convert-data/dataset/coco8/images/train2017/000000000009.jpg",
        output_path="output/detection_result.jpg",
        task_type="detect"
    )

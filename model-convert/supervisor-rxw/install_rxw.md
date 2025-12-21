@@ -5,56 +5,25 @@
 ## 1. 系统环境依赖
 
 ### 1.1 硬件环境
-- 华为昇腾910B NPU设备
+- 瑞芯微 RK3588
 
 ### 1.2 软件环境
 #### 基础系统依赖
 - Ubuntu 22.04 LTS
-- Python 3.10.0
-- cmake >= 3.5.1
-- make
-- gcc >= 4.8.5
-- g++ >= 4.8.5
-- unzip
-- zlib-devel (zlib1g-dev)
-- libffi-devel (libffi-dev)
-- openssl-devel
-- pciutils
-- net-tools
-- gdbm-devel (libgdbm-dev)
+- Python 3.10.12
+- python pip已经安装
+```shell
+wget https://bootstrap.pypa.io/get-pip.py
+sudo python3 get-pip.py
+```
+- pipenv (用于虚拟环境管理)
 
-#### CANN工具链
-- CANN版本：8.0.0
-- 安装路径：`/usr/local/Ascend/ascend-toolkit/8.0.0`
 
 #### Python依赖包
 ##### 第一步依赖 (requirements-hw-step1.txt)
 ```
-decorator==4.4.0
-sympy==1.5.1
-cffi==2.0.0
-attrs==25.3.0
-pyyaml
-pathlib2
-scipy
-requests==2.32.3
-psutil==7.0.0
-absl-py==2.1.0
-opencv-python==4.12.0.88
-ultralytics==8.3.156
-onnx==1.17.0
-onnxruntime==1.16.0
-fastapi==0.119.0
-uvicorn==0.38.0
-minio==7.2.18
-torch==2.8.0
-torch_npu==2.8.0
-torchvision==0.23.0
-```
-
-##### 第二步依赖 (requirements-hw-step2.txt)
-```
-numpy==1.24.0
+supervisor
+fastapi
 ```
 
 #### 服务依赖
@@ -195,7 +164,7 @@ sudo systemctl daemon-reload
 
 ```bash
 sudo systemctl enable supervisord
-sudo systemctl start supervisord
+sudo systemctl restart supervisord
 ```
 
 4. 检查服务状态：

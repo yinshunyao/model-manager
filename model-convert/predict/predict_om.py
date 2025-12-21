@@ -274,35 +274,72 @@ class HUAWEI_910B_Predictor:
                         acl.rt.free(buf)
                     
                     # 解析输出结果（这里需要根据实际模型输出格式进行调整）
-                    # 假设输出是 [x1, y1, x2, y2, confidence, class_id, class_id, ...] 的格式
+                    # 自动识别YOLOv8格式或其他格式
                     results = []
-                    # 实际解析代码会根据具体模型输出格式进行实现
-                    print(f"实际推理完成（目标检测）shape:{output_data.shape}, model id:{model_id}, num_outputs:{num_outputs}, num_inputs:{num_inputs}")
+                    logger.info(f"实际推理完成（目标检测）shape:{output_data.shape}, model id:{model_id}, num_outputs:{num_outputs}, num_inputs:{num_inputs}")
 
-                    if output_data.shape[0] == 705600:
-                        results = postprocess_yolov8(output_data, image.shape[:2])
+                    # 确保output_data是numpy数组
+                    if not isinstance(output_data, np.ndarray):
+                        output_data = np.array(output_data)
+                    
+                    # 展平输出数据以便统一处理
+                    original_shape = output_data.shape
+                    if len(output_data.shape) > 1:
+                        output_data_flat = output_data.flatten()
+                        logger.info(f"输出数据从 {original_shape} 展平为 {output_data_flat.shape}")
                     else:
+                        output_data_flat = output_data
+                    
+                    # 尝试检测是否是YOLOv8格式
+                    from predict.post_handle import is_yolov8_format
+                    is_yolov8, num_boxes, num_classes = is_yolov8_format(output_data_flat)
+                    
+                    if is_yolov8:
+                        # 使用YOLOv8后处理
+                        logger.info(f"检测到YOLOv8格式，使用YOLOv8后处理: num_boxes={num_boxes}, num_classes={num_classes}")
+                        results = postprocess_yolov8(output_data_flat, image.shape[:2])
+                    else:
+                        # 尝试其他格式：假设是 [x1, y1, x2, y2, score, class_id, ...] 格式
+                        logger.info(f"未检测到YOLOv8格式，尝试通用格式解析")
                         conf_threshold = 0.3  # 置信度阈值
                         valid_detections = 0
                         low_conf_detections = 0
-                        for i in range(0, len(output_data), 7):
-                            if i+6 < len(output_data):
-                                x1, y1, x2, y2, score, class_id = output_data[i:i+6]
-                                # 过滤低置信度的检测结果
-                                if score >= conf_threshold:
-                                    results.append([x1, y1, x2, y2, score, class_id])
-                                    valid_detections += 1
-                                else:
-                                    low_conf_detections += 1
-                    
-                    print(f"置信度过滤: 总检测数={len(output_data)//7}")
+                        
+                        # 尝试每6个或7个值一组
+                        for stride in [6, 7]:
+                            if len(output_data_flat) % stride == 0:
+                                num_detections = len(output_data_flat) // stride
+                                logger.info(f"尝试stride={stride}，检测框数量={num_detections}")
+                                
+                                for i in range(0, len(output_data_flat), stride):
+                                    if i + stride - 1 < len(output_data_flat):
+                                        if stride == 6:
+                                            x1, y1, x2, y2, score, class_id = output_data_flat[i:i+6]
+                                        else:  # stride == 7
+                                            x1, y1, x2, y2, score, class_id, _ = output_data_flat[i:i+7]
+                                        
+                                        # 过滤低置信度的检测结果
+                                        if score >= conf_threshold:
+                                            results.append([float(x1), float(y1), float(x2), float(y2), float(score), int(class_id)])
+                                            valid_detections += 1
+                                        else:
+                                            low_conf_detections += 1
+                                
+                                if valid_detections > 0:
+                                    logger.info(f"使用stride={stride}解析成功，有效检测数={valid_detections}")
+                                    break
+                        
+                        if len(results) == 0:
+                            logger.warning(f"无法解析输出数据，shape={original_shape}, size={output_data_flat.size}")
+                            # 如果无法解析，返回空结果
+                            return []
                     
                     # 如果检测结果过多，进一步限制数量
                     if len(results) > 1000:
                         # 按置信度排序，只保留前1000个
                         results.sort(key=lambda x: x[4], reverse=True)
                         results = results[:1000]
-                        print(f"检测结果过多，已限制到前1000个")
+                        logger.info(f"检测结果过多，已限制到前1000个")
                     
                     # 应用NMS处理
                     results = self._apply_nms(results)

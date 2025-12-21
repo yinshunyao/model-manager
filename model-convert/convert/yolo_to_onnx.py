@@ -1,3 +1,4 @@
+import logging
 import os
 import argparse
 import sys
@@ -6,20 +7,20 @@ import sys
 try:
     import torch
 except ImportError:
-    print("错误: 未安装torch。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 try:
     import numpy as np
 except ImportError:
-    print("错误: 未安装numpy。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 try:
     from ultralytics import YOLO
 except ImportError:
-    print("错误: 未安装ultralytics。请运行 'pip install -r requirements.txt' 安装所需依赖。")
-    sys.exit(1)
+    pass
+    # sys.exit(1)
     
 
 def convert_yolo11_to_onnx(model_path, output_path=None, imgsz=640, simplify=False, opset_version=17):
@@ -91,7 +92,8 @@ def convert_yolo11_to_onnx(model_path, output_path=None, imgsz=640, simplify=Fal
             device=device,
             # 使用正确的参数确保输出完整的特征维度
             dynamic=False,
-            batch=1
+            batch=1,
+            # nms=True
         )
         
         # 如果导出的文件不在期望的位置，移动它
@@ -320,3 +322,12 @@ def verify_onnx_model(onnx_path):
     except Exception as e:
         print(f"ONNX模型验证失败: {e}")
         return False
+
+if __name__ == '__main__':
+    file_pt = "/root/miniconda3/convert/model_demo/yolo11n.pt"
+    # file_pt = "/Users/shunyaoyin/Documents/code/other/model-manager/model-convert-data/model_demo/yolo11n.pt"
+    # file_onnx = "/root/miniconda3/convert/model_demo/yolo11n.onnx"
+    convert_yolo11_to_onnx(
+        model_path=file_pt,
+        output_path=""
+    )

@@ -2,9 +2,29 @@ import logging
 import onnx
 import os
 import subprocess
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
+import ctypes
+from predict.post_handle import postprocess_yolov8
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 配置华为环境
+# 手动设置昇腾环境变量（路径替换为实际值，参考终端中env的输出）
+os.environ["ASCEND_HOME"] = "/usr/local/Ascend/ascend-toolkit/8.0.0"
+os.environ["LD_LIBRARY_PATH"] = (
+    f"{os.environ['ASCEND_HOME']}/lib64:"
+    "/usr/local/Ascend/driver/lib64:"
+    f"{os.environ.get('LD_LIBRARY_PATH', '')}"
+)
+os.environ["PATH"] = f"{os.environ['ASCEND_HOME']}/bin:{os.environ.get('PATH', '')}"
+os.environ["PYTHONPATH"] = (
+    f"{os.environ['ASCEND_HOME']}/python/site-packages:"
+    f"{os.environ.get('PYTHONPATH', '')}"
+)
 
 
 class HUAWEI_910B_Predictor:
@@ -155,9 +175,18 @@ class HUAWEI_910B_Predictor:
                 if self.model.get('simulation_mode', True):
                     # 模拟检测结果
                     results = [
-                        [100, 100, 200, 200, 0.9, 0, 'person'],
-                        [300, 300, 400, 400, 0.85, 1, 'car']
+                        [100, 100, 200, 200, 0.9, 0],
+                        [300, 300, 400, 400, 0.85, 1]
                     ]
+                    # 应用NMS处理
+                    results = self._apply_nms(results)
+                    # 添加类别名称
+                    for result in results:
+                        if len(result) < 7:  # 如果还没有添加类别名称
+                            class_id = int(result[5])
+                            class_names = ['person', 'car']  # 示例类别名称
+                            class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
+                            result.append(class_name)
                     print("模拟推理完成（目标检测）")
                     return results
                 
@@ -220,44 +249,135 @@ class HUAWEI_910B_Predictor:
                     # output_buffer, ret = acl.rt.malloc(output_size, 0)  # type: ignore
                     # if ret != 0:
                     #     raise RuntimeError(f"分配输出缓冲区失败: {ret}")
-                    
+
                     # 从设备获取输出
                     output_data = np.zeros(output_size // 4, dtype=np.float32)
-                    ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
-                                       output_data.nbytes, output_buffer, 
-                                       output_size, 2)  # type: ignore acl.MEMCPY_DEVICE_TO_HOST
+                    # ret = acl.rt.memcpy(acl.util.bytes_to_ptr(output_data.tobytes()),  # type: ignore
+                    #                    output_data.nbytes, output_buffer,
+                    #                    output_size, 2)  # type: ignore acl.MEMCPY_DEVICE_TO_HOST
+                    dst_ptr = output_data.ctypes.data
+                    # output_data.ctypes.data_as(ctypes.c_void_p)
+                    ret = acl.rt.memcpy(
+                        dst_ptr,  # ← 正确获取数组内存地址
+                        output_data.nbytes,
+                        output_buffer,
+                        output_size,
+                        2  # 或直接用 2
+                    )
                     if ret != 0:
                         raise RuntimeError(f"复制输出数据失败: {ret}")
                     
                     # 释放缓冲区
                     acl.rt.free(input_buffer)  # type: ignore
-                    acl.rt.free(output_buffer)  # type: ignore
+                    # acl.rt.free(output_buffer)  # type: ignore
+                    for buf, size in output_buffers:
+                        acl.rt.free(buf)
                     
                     # 解析输出结果（这里需要根据实际模型输出格式进行调整）
-                    # 假设输出是 [x1, y1, x2, y2, confidence, class_id, class_id, ...] 的格式
+                    # 自动识别YOLOv8格式或其他格式
                     results = []
-                    # 实际解析代码会根据具体模型输出格式进行实现
-                    print(f"实际推理完成（目标检测）shape:{output_data.shape}, model id:{model_id}, num_outputs:{num_outputs}, num_inputs:{num_inputs}")
-                    for i in range(0, len(output_data), 7):
-                        x1, y1, x2, y2, score, class_id = output_data[i:i+6]
-                        results.append([x1, y1, x2, y2, score, class_id])
-                    return results[:20]
+                    logger.info(f"实际推理完成（目标检测）shape:{output_data.shape}, model id:{model_id}, num_outputs:{num_outputs}, num_inputs:{num_inputs}")
+
+                    # 确保output_data是numpy数组
+                    if not isinstance(output_data, np.ndarray):
+                        output_data = np.array(output_data)
+                    
+                    # 展平输出数据以便统一处理
+                    original_shape = output_data.shape
+                    if len(output_data.shape) > 1:
+                        output_data_flat = output_data.flatten()
+                        logger.info(f"输出数据从 {original_shape} 展平为 {output_data_flat.shape}")
+                    else:
+                        output_data_flat = output_data
+                    
+                    # 尝试检测是否是YOLOv8格式
+                    from predict.post_handle import is_yolov8_format
+                    is_yolov8, num_boxes, num_classes = is_yolov8_format(output_data_flat)
+                    
+                    if is_yolov8:
+                        # 使用YOLOv8后处理
+                        logger.info(f"检测到YOLOv8格式，使用YOLOv8后处理: num_boxes={num_boxes}, num_classes={num_classes}")
+                        results = postprocess_yolov8(output_data_flat, image.shape[:2])
+                    else:
+                        # 尝试其他格式：假设是 [x1, y1, x2, y2, score, class_id, ...] 格式
+                        logger.info(f"未检测到YOLOv8格式，尝试通用格式解析")
+                        conf_threshold = 0.3  # 置信度阈值
+                        valid_detections = 0
+                        low_conf_detections = 0
+                        
+                        # 尝试每6个或7个值一组
+                        for stride in [6, 7]:
+                            if len(output_data_flat) % stride == 0:
+                                num_detections = len(output_data_flat) // stride
+                                logger.info(f"尝试stride={stride}，检测框数量={num_detections}")
+                                
+                                for i in range(0, len(output_data_flat), stride):
+                                    if i + stride - 1 < len(output_data_flat):
+                                        if stride == 6:
+                                            x1, y1, x2, y2, score, class_id = output_data_flat[i:i+6]
+                                        else:  # stride == 7
+                                            x1, y1, x2, y2, score, class_id, _ = output_data_flat[i:i+7]
+                                        
+                                        # 过滤低置信度的检测结果
+                                        if score >= conf_threshold:
+                                            results.append([float(x1), float(y1), float(x2), float(y2), float(score), int(class_id)])
+                                            valid_detections += 1
+                                        else:
+                                            low_conf_detections += 1
+                                
+                                if valid_detections > 0:
+                                    logger.info(f"使用stride={stride}解析成功，有效检测数={valid_detections}")
+                                    break
+                        
+                        if len(results) == 0:
+                            logger.warning(f"无法解析输出数据，shape={original_shape}, size={output_data_flat.size}")
+                            # 如果无法解析，返回空结果
+                            return []
+                    
+                    # 如果检测结果过多，进一步限制数量
+                    if len(results) > 1000:
+                        # 按置信度排序，只保留前1000个
+                        results.sort(key=lambda x: x[4], reverse=True)
+                        results = results[:1000]
+                        logger.info(f"检测结果过多，已限制到前1000个")
+                    
+                    # 应用NMS处理
+                    results = self._apply_nms(results)
+                    return results
                     
                 except ImportError:
                     # 如果导入失败，回退到模拟模式
                     print("华为AscendCL API不可用，使用模拟模式")
-                    results = [
-                        [100, 100, 200, 200, 0.9, 0, 'person'],
-                        [300, 300, 400, 400, 0.85, 1, 'car']
-                    ]
-                    return results
+                results = [
+                    [100, 100, 200, 200, 0.9, 0],
+                    [300, 300, 400, 400, 0.85, 1]
+                ]
+                # 应用NMS处理
+                results = self._apply_nms(results)
+                # 添加类别名称
+                for result in results:
+                    if len(result) < 7:  # 如果还没有添加类别名称
+                        class_id = int(result[5])
+                        class_names = ['person', 'car']  # 示例类别名称
+                        class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
+                        result.append(class_name)
+                return results
             else:
                 # 如果模型不是字典类型，使用模拟模式
                 print("模型未正确加载，使用模拟模式")
                 results = [
-                    [100, 100, 200, 200, 0.9, 0, 'person'],
-                    [300, 300, 400, 400, 0.85, 1, 'car']
+                    [100, 100, 200, 200, 0.9, 0],
+                    [300, 300, 400, 400, 0.85, 1]
                 ]
+                # 应用NMS处理
+                results = self._apply_nms(results)
+                # 添加类别名称
+                for result in results:
+                    if len(result) < 7:  # 如果还没有添加类别名称
+                        class_id = int(result[5])
+                        class_names = ['person', 'car']  # 示例类别名称
+                        class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
+                        result.append(class_name)
                 return results
             
         except Exception as e:
@@ -369,7 +489,7 @@ class HUAWEI_910B_Predictor:
                     print(f"实际推理完成（图像分类）:{output_data.tolist()[:10]}")
                     
                     # 这里可以根据实际模型的类别列表进行映射
-                    # 以下是一个示例实现，将概率最高的前两个类别作为结果返回
+                    # 以下是一个示例实现，将概率最高的两个类别作为结果返回
                     results = []
                     if len(output_data) > 0:
                         # 获取概率最高的两个类别索引
@@ -435,6 +555,91 @@ class HUAWEI_910B_Predictor:
             except Exception:
                 # 静默处理析构函数中的异常
                 pass
+
+    def _calculate_iou(self, box1: List[float], box2: List[float]) -> float:
+        """
+        计算两个边界框之间的IoU (Intersection over Union)
+        
+        Args:
+            box1: [x1, y1, x2, y2]
+            box2: [x1, y1, x2, y2]
+            
+        Returns:
+            float: IoU值
+        """
+        # 计算交集坐标
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        # 计算交集面积
+        intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
+        
+        # 计算两个框的面积
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        
+        # 计算并集面积
+        union_area = box1_area + box2_area - intersection_area
+        
+        # 避免除零错误
+        if union_area == 0:
+            return 0
+            
+        # 返回IoU
+        return intersection_area / union_area
+    
+    def _apply_nms(self, detections: List[List[float]], iou_threshold: float = 0.45) -> List[List[float]]:
+        """
+        对检测结果应用非极大值抑制(NMS)
+        
+        Args:
+            detections: 检测结果列表，每个元素为 [x1, y1, x2, y2, confidence, class_id]
+            iou_threshold: IoU阈值
+            
+        Returns:
+            List[List[float]]: NMS后的检测结果
+        """
+        if len(detections) == 0:
+            return detections
+            
+        # 按置信度降序排序
+        sorted_indices = sorted(range(len(detections)), key=lambda i: detections[i][4], reverse=True)
+        keep_indices = []
+        
+        while sorted_indices:
+            # 保留置信度最高的检测框
+            current_idx = sorted_indices.pop(0)
+            keep_indices.append(current_idx)
+            
+            # 如果没有剩余的检测框，则退出循环
+            if not sorted_indices:
+                break
+                
+            # 计算当前检测框与剩余所有检测框的IoU
+            current_box = detections[current_idx]
+            remaining_indices = []
+            
+            for idx in sorted_indices:
+                box = detections[idx]
+                # 只对相同类别的检测框进行NMS
+                if current_box[5] == box[5]:  # class_id相同
+                    iou = self._calculate_iou(current_box[:4], box[:4])
+                    # 如果IoU小于阈值，则保留该检测框
+                    if iou < iou_threshold:
+                        remaining_indices.append(idx)
+                else:
+                    # 不同类别的检测框直接保留
+                    remaining_indices.append(idx)
+            
+            # 更新剩余检测框索引
+            sorted_indices = remaining_indices
+        
+        # 返回NMS后的检测结果
+        return [detections[i] for i in keep_indices]
+
+
 
 
 def get_input_shape_from_onnx(onnx_model_path: str) -> Dict[str, Tuple[int, ...]]:
@@ -597,7 +802,10 @@ if __name__ == "__main__":
 
     # 示例：使用对象进行推理
     # 注意：这里使用示例模型路径，实际使用时请替换为真实的OM模型路径
-    om_model_path = os.path.join(current_dir, "..", "model_demo",  "yolo11n.om")
+    # model_name = "model_yolo11.ysy.om"
+    # model_name = "model_yolo11.b2.om"
+    model_name = "yolo11n.nonms.om"
+    om_model_path = os.path.join(current_dir, "..", "model_demo",  model_name)
     # 图片路径 
     test_image_path = os.path.join(current_dir, "..", "000000000009.jpg")
     try:

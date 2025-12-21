@@ -1,0 +1,15 @@
+# dservice for systemd (CentOS 7.0+)
+# by ET-CS (https://github.com/ET-CS)
+# "systemctl daemon-reload" reload the config
+[Unit]
+Description=Supervisor daemon
+[Service]
+Type=forking
+ExecStart=supervisord -c /root/miniconda3/convert/supervisor/supervisord.conf
+ExecStop=supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf  shutdown
+ExecReload=supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf reload
+KillMode=process
+Restart=on-failure
+RestartSec=42s
+[Install]
+WantedBy=multi-user.target

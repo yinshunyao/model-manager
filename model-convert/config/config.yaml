@@ -20,7 +20,7 @@ minio:
 # MySQL数据库配置
 mysql:
   # 数据库连接地址
-  host: "localhost"
+  host: "127.0.0.1"
   # 数据库端口
   port: 3306
   # 数据库用户名
@@ -43,7 +43,7 @@ server:
   # REST API服务器地址
   host: "0.0.0.0"
   # REST API服务器端口
-  port: 8000
+  port: 38000
   # 是否启用调试模式
   debug: true
   # 最大请求体大小（MB）
@@ -56,7 +56,7 @@ server:
 # 华为昇腾配置
 ascend:
   # 目标芯片版本
-  soc_version: "Ascend910B"
+  soc_version: "Ascend910B2"
   # 精度模式
   precision_mode: "allow_fp32_to_fp16"
   # ATC工具路径
@@ -112,13 +112,13 @@ rabbitmq:
   # 连接配置
   connection:
     # RabbitMQ服务器地址
-    host: "localhost"
+    host: "8.137.18.24"
     # RabbitMQ服务器端口
     port: 5672
     # RabbitMQ用户名
-    username: "guest"
+    username: "admin"
     # RabbitMQ密码
-    password: "guest"
+    password: "rmq-sd-sc"
     # 虚拟主机
     virtual_host: "/"
     # 连接超时时间（秒）
@@ -133,56 +133,14 @@ rabbitmq:
     task_queue: "model_convert_tasks"
     # 结果队列名称
     result_queue: "model_convert_results"
-    # 任务队列参数
-    task_queue_params:
-      # 是否持久化
-      durable: true
-      # 是否排他
-      exclusive: false
-      # 是否自动删除
-      auto_delete: false
-    # 结果队列参数
-    result_queue_params:
-      # 是否持久化
-      durable: true
-      # 是否排他
-      exclusive: false
-      # 是否自动删除
-      auto_delete: false
-    # 消息发布参数
-    publish_params:
-      # 投递模式（2表示持久化）
-      delivery_mode: 2
-      # 内容类型
-      content_type: "application/json"
 
-# 模型转换配置
-conversion:
-  # 临时文件目录
-  temp_dir: "/tmp/model_convert"
-  # 最大并发转换任务数
-  max_concurrent_tasks: 5
-  # 转换超时时间（秒）
-  timeout: 600
-  # 日志文件路径
-  log_file: "./logs/conversion.log"
-  # 是否保存转换历史
-  save_history: true
-
-# 任务管理中心配置
+# 任务中心配置
 task_center:
-  # 任务管理中心URL主地址，以http或https开头
-  url: "http://localhost:8000"
+  # 任务中心URL
+  url: "http://8.137.18.24:38000"
 
-# 日志配置
-logging:
-  # 日志级别
-  level: "INFO"
-  # 日志文件路径
-  file_path: "./logs/app.log"
-  # 日志格式
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  # 日志文件最大大小（MB）
-  max_bytes: 100
-  # 日志文件备份数量
-  backup_count: 5
+# 回调配置
+callback:
+  # 回调接口地址
+   url: "http://125.77.155.10:3007/api/predict/callback"
+#  url: "http://127.0.0.1:38000/api/predict/callback"

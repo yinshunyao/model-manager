@@ -9,65 +9,9 @@ ONNX 模型转换为华为昇腾 910B 处理器支持的 OM 格式模型
 import logging
 import os
 import subprocess
-import argparse
-from typing import Dict, Optional, Union, Tuple, Any, List
-import onnx
+from typing import Optional, Union, Tuple
+from convert.utils import get_input_shape_from_onnx, get_params_onnx
 
-
-def get_input_shape_from_onnx(onnx_model_path: str) -> Dict[str, Tuple[int, ...]]:
-    """
-    从 ONNX 模型文件中自动获取输入形状
-    
-    Args:
-        onnx_model_path (str): ONNX 模型文件路径
-    
-    Returns:
-        Dict[str, Tuple[int, ...]]: 输入名称到形状的映射字典
-    
-    Raises:
-        ValueError: 当无法从模型中获取输入形状时
-    """
-    try:
-        # 加载 ONNX 模型
-        model = onnx.load(onnx_model_path)
-        
-        # 获取模型的输入
-        inputs = model.graph.input
-        
-        if not inputs:
-            raise ValueError("无法从 ONNX 模型中获取输入信息")
-        
-        input_shapes = {}
-        
-        for input_node in inputs:
-            # 获取输入名称
-            input_name = input_node.name
-            
-            # 获取输入形状
-            shape = []
-            for dim in input_node.type.tensor_type.shape.dim:
-                if dim.dim_value > 0:
-                    # 固定维度
-                    shape.append(int(dim.dim_value))
-                elif dim.dim_param:
-                    # 参数化维度，这里我们使用默认值 1
-                    # 注意：这可能不适用于所有模型，特别是对于动态形状
-                    shape.append(1)
-                else:
-                    # 未知维度，使用默认值 1
-                    shape.append(1)
-            
-            input_shapes[input_name] = tuple(shape)
-        
-        if not input_shapes:
-            raise ValueError("无法从 ONNX 模型中解析出有效的输入形状")
-        
-        return input_shapes
-    
-    except (FileNotFoundError, IOError):
-        raise FileNotFoundError(f"ONNX 模型文件不存在或无法读取: {onnx_model_path}")
-    except Exception as e:
-        raise ValueError(f"从 ONNX 模型获取输入形状时出错: {str(e)}")
 
 def onnx_to_om(
     onnx_model_path: str,
@@ -116,15 +60,17 @@ def onnx_to_om(
     if input_shape is None and auto_input_shape:
         # logging.warning("未提供输入形状，尝试从 ONNX 模型中自动获取...")
         try:
-            input_shapes = get_input_shape_from_onnx(onnx_model_path)
-            logging.warning(f"成功从模型中获取输入形状: {input_shapes}")
-            
-            # 构建 input_shape_str，格式为 "input_name1:n1,c1,h1,w1;input_name2:n2,c2,h2,w2"
-            input_shape_parts = []
-            for name, shape in input_shapes.items():
-                shape_str = ",".join(map(str, shape))
-                input_shape_parts.append(f"{name}:{shape_str}")
-            input_shape_str = ";".join(input_shape_parts)
+            params = get_params_onnx(onnx_model_path)
+            params_atc = params.atc_params
+            # input_shapes = get_input_shape_from_onnx(onnx_model_path)
+            # logging.warning(f"成功从模型中获取输入形状: {input_shapes}")
+            #
+            # # 构建 input_shape_str，格式为 "input_name1:n1,c1,h1,w1;input_name2:n2,c2,h2,w2"
+            # input_shape_parts = []
+            # for name, shape in input_shapes.items():
+            #     shape_str = ",".join(map(str, shape))
+            #     input_shape_parts.append(f"{name}:{shape_str}")
+            # input_shape_str = ";".join(input_shape_parts)
         except Exception as e:
             logging.error(f"自动获取输入形状失败: {str(e)}")
             raise ValueError("无法获取输入形状，请手动提供 input_shape 参数") from e
@@ -187,19 +133,25 @@ def onnx_to_om(
         else:
             raise ValueError(f"不支持的输入形状类型: {type(input_shape)}")
 
+        params_atc = ["--input_shape=" + input_shape_str]
+
     # 构建 ATC 命令
+    # input_shape [N, C, H, W]
     cmd = [
         "atc",
         "--model=" + onnx_model_path,
         "--framework=5",  # 5 表示 ONNX 框架
         "--output=" + output_om_path,
-        "--input_shape=" + input_shape_str,
+        # "--input_shape=" + input_shape_str,
         "--soc_version=" + soc_version,
         # --precision_mode=force_fp32
         # "--precision_mode=" + precision_mode,
         "--log=" + log_level,
         # "--output_type=FP32"
     ]
+
+    # 其他参数
+    cmd.extend(params_atc)
 
     # 添加额外的参数
     for key, value in kwargs.items():

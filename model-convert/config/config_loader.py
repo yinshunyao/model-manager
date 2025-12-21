@@ -234,3 +234,6 @@ class ConfigLoader:
 
 # 创建全局配置加载器实例
 config_loader = ConfigLoader()
+
+if __name__ == '__main__':
+    print(config_loader.get_server_config())

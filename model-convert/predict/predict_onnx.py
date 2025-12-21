@@ -585,17 +585,31 @@ def draw_detection_results(image_path: str, results: list, output_path: Optional
             class_id = result['class']
             class_name = result.get('class_name', f'class_{class_id}')
             
-            # 转换边界框坐标（归一化 -> 像素坐标）
-            x1 = int(bbox[0] * img_width)
-            y1 = int(bbox[1] * img_height)
-            x2 = int(bbox[2] * img_width)
-            y2 = int(bbox[3] * img_height)
+            # 处理边界框坐标
+            # 检测结果中的坐标可能是像素坐标而不是归一化坐标
+            # 根据坐标值范围判断是否需要转换
+            if all(isinstance(coord, (int, float)) and 0 <= coord <= 1.0 for coord in bbox):
+                # 归一化坐标，需要转换为像素坐标
+                x1 = int(bbox[0] * img_width)
+                y1 = int(bbox[1] * img_height)
+                x2 = int(bbox[2] * img_width)
+                y2 = int(bbox[3] * img_height)
+            else:
+                # 已经是像素坐标，直接转换为整数
+                x1 = int(round(bbox[0]))
+                y1 = int(round(bbox[1]))
+                x2 = int(round(bbox[2]))
+                y2 = int(round(bbox[3]))
             
             # 确保坐标在图片范围内
-            x1 = max(0, min(x1, img_width))
-            y1 = max(0, min(y1, img_height))
-            x2 = max(0, min(x2, img_width))
-            y2 = max(0, min(y2, img_height))
+            x1 = max(0, min(x1, img_width-1))
+            y1 = max(0, min(y1, img_height-1))
+            x2 = max(0, min(x2, img_width-1))
+            y2 = max(0, min(y2, img_height-1))
+            
+            # 确保坐标顺序正确（x1,y1为左上角，x2,y2为右下角）
+            x1, x2 = min(x1, x2), max(x1, x2)
+            y1, y2 = min(y1, y2), max(y1, y2)
             
             # 选择颜色
             color = colors[i % len(colors)]
@@ -742,9 +756,9 @@ def main():
     示例用法
     """
     # 示例：使用YOLO ONNX模型进行推理
-    model_path = "../model_demo/out/yolo11n.onnx"  # 替换为实际的模型路径
+    model_path = "../../model-convert-data/model_demo/yolo11n.onnx"  # 替换为实际的模型路径
     # image_path = "../../dataset/coco8/datasets/coco8/images/val/000000000049.jpg"  # 替换为实际的图片路径
-    image_path = "/Users/shunyaoyin/Documents/code/other/model-manager/dataset/coco8/datasets/coco8/images/train/000000000009.jpg"
+    image_path = "../../model-convert-data/dataset/coco8/datasets/coco8/images/train/000000000009.jpg"
     if not os.path.exists(model_path):
         print(f"模型文件不存在: {model_path}")
         print("请确保模型文件存在，或修改model_path变量")

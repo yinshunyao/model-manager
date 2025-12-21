@@ -1,6 +1,6 @@
-[program:web-convert]
-command=%(here)s/../bin/python3  %(here)s/../model-convert/rest_convert.py
-autostart=false
+[program:frpc]
+command=%(here)s/../../frp_0.48.0_linux_arm64/frpc -c %(here)s/../../frp_0.48.0_linux_arm64/frpc.ini
+autostart=true
 autorestart=true
 priority=10
 user=root

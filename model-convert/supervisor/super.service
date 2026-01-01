@@ -5,9 +5,9 @@
 Description=Supervisor daemon
 [Service]
 Type=forking
-ExecStart=supervisord -c /root/miniconda3/convert/supervisor/supervisord.conf
-ExecStop=supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf  shutdown
-ExecReload=supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf reload
+ExecStart=/root/miniconda3/bin/python /root/miniconda3/bin/supervisord -c /root/miniconda3/convert/supervisor/supervisord.conf
+ExecStop=/root/miniconda3/bin/python /root/miniconda3/bin/supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf  shutdown
+ExecReload=/root/miniconda3/bin/python /root/miniconda3/bin/supervisorctl -c /root/miniconda3/convert/supervisor/supervisord.conf reload
 KillMode=process
 Restart=on-failure
 RestartSec=42s

@@ -5,11 +5,21 @@
 # @Email   : shunyaoyin@xxx.com
 # @Detail  : 瑞芯微RK3588平台推理和模型转换服务
 # @Software: PyCharm
+import logging
+# 配置日志，包含文件名和行号信息
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+)
+logger = logging.getLogger(__name__)
 import os
 import shutil
+import threading
+
 import sys
 import tempfile
 
+rknn_lock = threading.RLock()
 # 添加项目根目录和model-convert目录到Python路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 model_convert_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,11 +31,9 @@ config_path = os.path.join(model_convert_path, 'config')
 if config_path not in sys.path:
     sys.path.insert(0, config_path)
 
-import logging
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Union
-import asyncio
 import httpx
 from config.config_loader import config_loader
 
@@ -40,16 +48,12 @@ if os.path.exists(rknn_toolkit_path):
 
 from predict.predict_rknn import RK3588_Predictor
 from convert.onnx_to_rknn import onnx_to_rknn
-import cv2
 
 # 导入MinIO处理模块
 from tools.handle_file_minio import minio_handler, init_minio_handler
 
 from rest_simple.utils import draw_detection_results, BUCKET_ENGINE, BUCKET_ONNX, BUCKET_SOURCE, BUCKET_MODEL, BUCKET_TARGET
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="瑞芯微RK3588平台推理和模型转换服务",
@@ -112,7 +116,7 @@ async def send_callback(callback_data: dict):
     try:
         logger.warning(f"callback_data:{callback_data}")
         async with httpx.AsyncClient() as client:
-            response = await client.post(CALLBACK_URL, json=callback_data, timeout=30.0)
+            response = await client.post(CALLBACK_URL, json=callback_data, timeout=5.0)
             logger.info(f"回调请求发送成功，状态码: {response.status_code}")
             return True
     except Exception as e:
@@ -120,12 +124,16 @@ async def send_callback(callback_data: dict):
         return False
 
 
-def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
+def process_minio_file(file_path: str, bucket_name: str = None) -> tuple[str, bool]:
     """
     处理MinIO文件路径，如果是MinIO路径则下载到本地临时文件
     
     Args:
-        file_path: 输入文件路径，可以是本地路径或MinIO路径格式(bucket/object)
+        file_path: 输入文件路径，可以是：
+                  - 本地路径（以/开头）
+                  - MinIO路径格式(bucket/object)，如 "source-file/1-car.jpeg"
+                  - 对象名称（需要提供bucket_name）
+        bucket_name: 如果file_path只是对象名称，需要提供bucket名称
         
     Returns:
         tuple: (本地文件路径, 是否为MinIO文件)
@@ -136,7 +144,7 @@ def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
 
     filename = os.path.basename(file_path)
 
-    # 如果/开头
+    # 如果/开头，是本地路径
     if file_path.startswith('/'):
         logger.warning(f"输入文件路径是本地路径 {file_path}")
         fd, temp_path = tempfile.mkstemp(suffix=filename)
@@ -145,27 +153,48 @@ def process_minio_file(file_path: str, bucket_name: str) -> tuple[str, bool]:
         shutil.copy(file_path, temp_path)
         return temp_path, True
 
-    # file_path = os.path.join(bucket_name, file_path)
+    # 判断是否是MinIO路径格式 (bucket/object)
+    # 如果包含/且不是绝对路径，可能是bucket/object格式
+    if '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
+        try:
+            # 解析bucket和object
+            parts = file_path.split('/', 1)
+            actual_bucket_name = parts[0]
+            object_name = parts[1]
+            
+            # 创建临时文件
+            fd, temp_path = tempfile.mkstemp(suffix=os.path.basename(object_name))
+            os.close(fd)
 
-    # 判断是否是MinIO路径格式 (bucket/object)，其余均为minio
-    # if minio_handler and '/' in file_path and len(file_path.split('/')) >= 2 and not os.path.isabs(file_path):
-    try:
-        # 创建临时文件
-        fd, temp_path = tempfile.mkstemp(suffix=filename)
-        os.close(fd)
-
-        # 从MinIO下载文件
-        if minio_handler.download_file(bucket_name, file_path, temp_path):
-            logger.info(f"成功从MinIO下载文件: {bucket_name}/{file_path} -> {temp_path}")
-            return temp_path, True
-        else:
-            raise ValueError(f"从MinIO下载文件失败: {bucket_name} {file_path}")
-    except Exception as e:
-        logger.error(f"处理MinIO文件失败: {str(e)}")
-        raise
+            # 从MinIO下载文件
+            if minio_handler.download_file(actual_bucket_name, object_name, temp_path):
+                logger.info(f"成功从MinIO下载文件: {actual_bucket_name}/{object_name} -> {temp_path}")
+                return temp_path, True
+            else:
+                raise ValueError(f"从MinIO下载文件失败: {actual_bucket_name}/{object_name}")
+        except Exception as e:
+            logger.error(f"处理MinIO文件失败: {str(e)}")
+            raise
     
-    # 本地文件直接返回
-    # return file_path, False
+    # 如果只是对象名称，使用提供的bucket_name
+    if bucket_name:
+        try:
+            # 创建临时文件
+            fd, temp_path = tempfile.mkstemp(suffix=filename)
+            os.close(fd)
+
+            # 从MinIO下载文件
+            if minio_handler.download_file(bucket_name, file_path, temp_path):
+                logger.info(f"成功从MinIO下载文件: {bucket_name}/{file_path} -> {temp_path}")
+                return temp_path, True
+            else:
+                raise ValueError(f"从MinIO下载文件失败: {bucket_name}/{file_path}")
+        except Exception as e:
+            logger.error(f"处理MinIO文件失败: {str(e)}")
+            raise
+    
+    # 如果既不是bucket/object格式，也没有提供bucket_name，报错
+    raise ValueError(f"无法处理文件路径: {file_path}，需要提供bucket_name或使用bucket/object格式")
 
 
 def cleanup_temp_file(file_path: str, is_minio_file: bool):
@@ -181,15 +210,22 @@ def cleanup_temp_file(file_path: str, is_minio_file: bool):
 def run_inference(engine_file: str, source_file: str, target_file: str, bucket_name: str) -> Union[bool, dict]:
     """执行推理任务"""
     # 处理MinIO文件
+    # engine_file 从 BUCKET_ENGINE 下载
     local_engine_file, is_engine_minio = process_minio_file(engine_file, bucket_name)
-    local_source_file, is_source_minio = process_minio_file(source_file, bucket_name)
+    # source_file 可能是 bucket/object 格式，process_minio_file 会自动解析
+    local_source_file, is_source_minio = process_minio_file(source_file)
     
+    predictor = None
     try:
         # 初始化预测器
         predictor = RK3588_Predictor(rknn_model_path=local_engine_file)
         
         # 执行推理
-        result = predictor.predict(image=local_source_file)
+        with rknn_lock:
+            result = predictor.predict(image=local_source_file)
+            # 先释放资源
+            predictor.release()
+            predictor = None
         
         # 绘制检测结果并保存
         drawn_target_file = draw_detection_results(
@@ -206,9 +242,17 @@ def run_inference(engine_file: str, source_file: str, target_file: str, bucket_n
         # 返回推理结果，供回调使用
         return result
     except Exception as e:
-        logger.error(f"推理任务执行失败: {str(e)}")
+        logger.error(f"推理任务执行失败: {str(e)}", exc_info=True)
         return False
     finally:
+        # 确保释放predictor资源
+        if predictor is not None:
+            try:
+                predictor.release()
+                logger.info("Predictor资源已释放")
+            except Exception as e:
+                logger.error(f"释放Predictor资源失败: {str(e)}", exc_info=True)
+        
         # 清理临时文件
         cleanup_temp_file(local_engine_file, is_engine_minio)
         cleanup_temp_file(local_source_file, is_source_minio)
@@ -222,13 +266,14 @@ def run_conversion(onnx_file: str, rknn_file: str, bucket_name: str) -> bool:
     try:
         # 调用onnx_to_rknn函数进行转换
         # 传递额外的参数以确保转换成功
-        success = onnx_to_rknn(
-            onnx_model_path=local_onnx_file,
-            output_rknn_path=rknn_file,
-            auto_input_shape=True,
-            target_platform=config_loader.get_config_value("rockchip.params.default_target_platform", "rk3588"),
-            precision_mode=config_loader.get_config_value("rockchip.params.default_precision", "float32")
-        )
+        with rknn_lock:
+            success = onnx_to_rknn(
+                onnx_model_path=local_onnx_file,
+                output_rknn_path=rknn_file,
+                auto_input_shape=True,
+                target_platform=config_loader.get_config_value("rockchip.params.default_target_platform", "rk3588"),
+                precision_mode=config_loader.get_config_value("rockchip.params.default_precision", "float32")
+            )
 
         # 检查生成的RKNN文件是否存在
         if success and not os.path.exists(rknn_file):
@@ -288,10 +333,12 @@ def upload_to_minio_if_needed(file_path: str, minio_path: str) -> str:
 async def process_task(request: PredictRequest):
     """后台处理任务"""
     # 初始化回调数据
+    # 根据接口文档，platform字段应该是 "Huawei"、"Rockchip" 或 "Cambricon"
+    # 对于瑞芯微平台，默认为 "Rockchip"
     callback_data = {
         "task_id": request.task_id,
         "model_id": request.model_id,
-        "platform": request.platform or "",
+        "platform": request.platform or "Rockchip",
         "result": "",
         "target_file": "",
         "engine_file": request.engine_file or "",
@@ -299,46 +346,15 @@ async def process_task(request: PredictRequest):
     # CallbackRequest(**callback_data)
     
     try:
-        if request.engine_file:
-            # 推理任务
-            logger.info(f"开始执行推理任务，任务ID: {request.task_id}")
-            
-            # 定义输出文件路径
-            target_file = f"/tmp/result_{request.task_id}.jpg"
-            
-            # 执行推理
-            result = run_inference(request.engine_file, request.source_file_bucket, target_file, bucket_name=BUCKET_ENGINE)
-            
-            if result:
-                # 如果source_file是MinIO路径，将结果上传到相同的bucket
-                result_object_name = f"result_{request.task_id}.jpg"
-                try:
-                    # 上传失败
-                    if not upload_to_minio_if_needed(target_file, f"{BUCKET_TARGET}/{result_object_name}"):
-                        callback_data.update({
-                            "result": "上传结果文件到MinIO失败",
-                            "target_file": ""
-                        })
-                    else:
-                        # 根据接口文档，result字段应该包含实际的推理结果
-                        # 将推理结果转换为JSON字符串
-                        import json
-                        result_str = json.dumps(result, ensure_ascii=False)
-
-                        callback_data.update({
-                            "result": result_str,
-                            "target_file": result_object_name
-                        })
-                        logger.info(f"推理任务执行成功，任务ID: {request.task_id}")
-
-                except Exception as e:
-                    logger.error(f"上传结果文件到MinIO时出错: {str(e)}")
-                    callback_data.update({
-                        "result": "上传结果文件到MinIO失败",
-                        "target_file": ""
-                    })
-        else:
-            # 模型转换任务
+        # 根据 engine_file 字段识别子任务
+        # 推理任务是必须执行的，模型转换任务是可选任务
+        # 如果 engine_file 为空，需要先进行模型转换任务，然后执行推理
+        # 如果 engine_file 不为空，直接执行推理任务
+        
+        engine_file_path = None
+        
+        if not request.engine_file:
+            # engine_file 为空，需要先进行模型转换任务（可选任务）
             logger.info(f"开始执行模型转换任务，任务ID: {request.task_id}")
             
             # 定义输出RKNN文件路径
@@ -353,11 +369,13 @@ async def process_task(request: PredictRequest):
                     logger.error(f"模型转换报告成功，但输出文件不存在: {rknn_file}")
                     callback_data.update({
                         "result": "转换失败：输出文件不存在",
-                        "engine_file": None
+                        "engine_file": ""
                     })
                     logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                    await send_callback(callback_data)
+                    return
                 else:
-                    # 如果onnx_file是MinIO路径，将结果上传到相同的bucket
+                    # 上传RKNN文件到MinIO
                     try:
                         bucket_name = BUCKET_ENGINE
                         # 生成RKNN文件名
@@ -365,33 +383,114 @@ async def process_task(request: PredictRequest):
                         # 上传RKNN文件到MinIO
                         final_rknn_file = upload_to_minio_if_needed(rknn_file, f"{bucket_name}/{rknn_object_name}")
                         if final_rknn_file:
-                            callback_data.update({
-                                "result": "转换成功",
-                                "engine_file": rknn_object_name
-                            })
                             logger.info(f"模型转换任务执行成功，任务ID: {request.task_id}")
+                            # 设置生成的 engine_file 路径，用于后续推理
+                            engine_file_path = f"{bucket_name}/{rknn_object_name}"
+                            # 保存到callback_data，供推理回调使用
+                            callback_data["engine_file"] = rknn_object_name
+                            
+                            # 模型转换任务完成后，发送回调
+                            conversion_callback = {
+                                "task_id": request.task_id,
+                                "model_id": request.model_id,
+                                "platform": request.platform or "Rockchip",
+                                "result": "转换成功",
+                                "target_file": "",
+                                "engine_file": rknn_object_name
+                            }
+                            await send_callback(conversion_callback)
+                            
+                            # 上传成功后清理本地临时文件
+                            cleanup_temp_file(rknn_file, True)
                         else:
                             callback_data.update({
                                 "result": "转换成功，但上传到MinIO失败",
                                 "engine_file": ""
                             })
-                            logger.warning(f"模型转换成功但上传失败，任务ID: {request.task_id}")
+                            logger.error(f"模型转换成功但上传到MinIO失败，任务ID: {request.task_id}")
+                            await send_callback(callback_data)
+                            return
                     except Exception as e:
-                        logger.error(f"上传RKNN文件到MinIO时出错: {str(e)}")
+                        logger.error(f"上传RKNN文件到MinIO时出错: {str(e)}", exc_info=True)
                         callback_data.update({
                             "result": "转换失败，结果上传Minio失败",
                             "engine_file": ""
                         })
                         logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                        await send_callback(callback_data)
+                        return
             else:
                 callback_data.update({
                     "result": "转换失败",
                     "engine_file": ""
                 })
                 logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                await send_callback(callback_data)
+                return
+        else:
+            # engine_file 不为空，直接使用提供的 engine_file
+            engine_file_path = request.engine_file
         
-        # 发送回调
-        await send_callback(callback_data)
+        # 推理任务是必须执行的
+        logger.info(f"开始执行推理任务，任务ID: {request.task_id}")
+        
+        # 初始化推理回调数据（保持engine_file，如果模型转换已设置）
+        inference_callback_data = {
+            "task_id": request.task_id,
+            "model_id": request.model_id,
+            "platform": request.platform or "Rockchip",
+            "result": "",
+            "target_file": "",
+            "engine_file": callback_data["engine_file"]
+        }
+        
+        # 定义输出文件路径
+        target_file = f"/tmp/result_{request.task_id}.jpg"
+        
+        # 执行推理
+        result = run_inference(engine_file_path, request.source_file_bucket, target_file, bucket_name=BUCKET_ENGINE)
+        
+        if result:
+            # 将结果上传到MinIO
+            result_object_name = f"result_{request.task_id}.jpg"
+            try:
+                # 上传结果图片到MinIO
+                final_result_file = upload_to_minio_if_needed(target_file, f"{BUCKET_TARGET}/{result_object_name}")
+                if not final_result_file:
+                    inference_callback_data.update({
+                        "result": "上传结果文件到MinIO失败",
+                        "target_file": ""
+                    })
+                else:
+                    # 根据接口文档，result字段应该包含实际的推理结果
+                    # 将推理结果转换为JSON字符串
+                    import json
+                    result_str = json.dumps(result, ensure_ascii=False)
+
+                    inference_callback_data.update({
+                        "result": result_str,
+                        "target_file": result_object_name
+                    })
+                    logger.info(f"推理任务执行成功，任务ID: {request.task_id}")
+                    
+                    # 上传成功后清理本地临时文件
+                    cleanup_temp_file(target_file, True)
+            except Exception as e:
+                logger.error(f"上传结果文件到MinIO时出错: {str(e)}", exc_info=True)
+                inference_callback_data.update({
+                    "result": "上传结果文件到MinIO失败",
+                    "target_file": ""
+                })
+        else:
+            # 推理失败
+            inference_callback_data.update({
+                "result": "推理失败",
+                "target_file": ""
+            })
+            logger.error(f"推理任务执行失败，任务ID: {request.task_id}")
+        
+        # 推理任务完成后，发送回调
+        await send_callback(inference_callback_data)
         
     except Exception as e:
         logger.error(f"任务处理过程中出现异常: {str(e)}", exc_info=True)
@@ -415,9 +514,9 @@ async def predict(request: PredictRequest, background_tasks: BackgroundTasks):
     # 将任务添加到后台执行
     background_tasks.add_task(process_task, request)
     
-    # 立即返回响应
+    # 立即返回响应，根据接口文档返回202表示任务已接收
     return {
-        "code": 200,
+        "code": 202,
         "data": {
             "task_id": str(request.task_id),
             "status": "pending",

@@ -142,5 +142,5 @@ task_center:
 # 回调配置
 callback:
   # 回调接口地址
-   url: "http://125.77.155.10:3007/api/predict/callback"
+   url: "http://45.126.120.18:3007/api/predict/callback"
 #  url: "http://127.0.0.1:38000/api/predict/callback"

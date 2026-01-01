@@ -70,7 +70,8 @@ from rest_simple.utils import draw_detection_results, BUCKET_ENGINE, BUCKET_ONNX
 app = FastAPI(
     title="华为910b平台推理和模型转换服务",
     description="提供华为910b平台上的图片推理和模型转换任务执行",
-    version="1.0.0"
+    version="1.0.0",
+    debug=True
 )
 
 # 从配置文件获取回调URL
@@ -348,10 +349,12 @@ def upload_to_minio_if_needed(file_path: str, minio_path: str) -> str:
 async def process_task(request: PredictRequest):
     """后台处理任务"""
     # 初始化回调数据
+    # 根据接口文档，platform字段应该是 "Huawei"、"Rockchip" 或 "Cambricon"
+    # 对于华为910B平台，默认为 "Huawei"
     callback_data = {
         "task_id": request.task_id,
         "model_id": request.model_id,
-        "platform": request.platform or "",
+        "platform": request.platform or "Huawei",
         "result": "",
         "target_file": "",
         "engine_file": request.engine_file or "",
@@ -359,46 +362,15 @@ async def process_task(request: PredictRequest):
     # CallbackRequest(**callback_data)
     
     try:
-        if request.engine_file:
-            # 推理任务
-            logger.info(f"开始执行推理任务，任务ID: {request.task_id}")
-            
-            # 定义输出文件路径
-            target_file = f"/tmp/result_{request.task_id}.jpg"
-            
-            # 执行推理
-            result = run_inference(request.engine_file, request.source_file_bucket, target_file, bucket_name=BUCKET_ENGINE)
-            
-            if result:
-                # 如果source_file是MinIO路径，将结果上传到相同的bucket
-                result_object_name = f"result_{request.task_id}.jpg"
-                try:
-                    # 上传失败
-                    if not upload_to_minio_if_needed(target_file, f"{BUCKET_TARGET}/{result_object_name}"):
-                        callback_data.update({
-                            "result": "上传结果文件到MinIO失败",
-                            "target_file": ""
-                        })
-                    else:
-                        # 根据接口文档，result字段应该包含实际的推理结果
-                        # 将推理结果转换为JSON字符串
-                        import json
-                        result_str = json.dumps(result, ensure_ascii=False)
-
-                        callback_data.update({
-                            "result": result_str,
-                            "target_file": result_object_name
-                        })
-                        logger.info(f"推理任务执行成功，任务ID: {request.task_id}")
-
-                except Exception as e:
-                    logger.error(f"上传结果文件到MinIO时出错: {str(e)}")
-                    callback_data.update({
-                        "result": "上传结果文件到MinIO失败",
-                        "target_file": ""
-                    })
-        else:
-            # 模型转换任务
+        # 根据 engine_file 字段识别子任务
+        # 推理任务是必须执行的，模型转换任务是可选任务
+        # 如果 engine_file 为空，需要先进行模型转换任务，然后执行推理
+        # 如果 engine_file 不为空，直接执行推理任务
+        
+        engine_file_path = None
+        
+        if not request.engine_file:
+            # engine_file 为空，需要先进行模型转换任务（可选任务）
             logger.info(f"开始执行模型转换任务，任务ID: {request.task_id}")
             
             # 定义输出OM文件路径
@@ -416,41 +388,124 @@ async def process_task(request: PredictRequest):
                     logger.error(f"模型转换报告成功，但输出文件不存在: {om_file}")
                     callback_data.update({
                         "result": "转换失败：输出文件不存在",
-                        "engine_file": None
+                        "engine_file": ""
                     })
                     logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                    await send_callback(callback_data)
+                    return
                 else:
-                    # 如果onnx_file是MinIO路径，将结果上传到相同的bucket
-                    # final_om_file = om_file
-                    # if '/' in request. and len(request.onnx_file.split('/')) >= 2 and not os.path.isabs(request.onnx_file):
+                    # 上传OM文件到MinIO
                     try:
                         bucket_name = BUCKET_ENGINE
                         # 生成OM文件名
                         om_object_name = request.model_file.replace('.onnx', '.om') if '.onnx' in request.model_file else f"{request.model_file}.om"
-                        # final_om_file = upload_to_minio_if_needed(om_file, f"{bucket_name}/{om_object_name}")
-                        callback_data.update({
-                            "result": "转换成功",
-                            "engine_file": om_object_name
-                        })
-                        logger.info(f"模型转换任务执行成功，任务ID: {request.task_id}")
+                        # 上传OM文件到MinIO
+                        final_om_file = upload_to_minio_if_needed(om_file, f"{bucket_name}/{om_object_name}")
+                        if final_om_file:
+                            logger.info(f"模型转换任务执行成功，任务ID: {request.task_id}")
+                            # 设置生成的 engine_file 路径，用于后续推理
+                            engine_file_path = f"{bucket_name}/{om_object_name}"
+                            # 保存到callback_data，供推理回调使用
+                            callback_data["engine_file"] = om_object_name
+                            
+                            # 模型转换任务完成后，发送回调
+                            conversion_callback = {
+                                "task_id": request.task_id,
+                                "model_id": request.model_id,
+                                "platform": request.platform or "Huawei",
+                                "result": "转换成功",
+                                "target_file": "",
+                                "engine_file": om_object_name
+                            }
+                            await send_callback(conversion_callback)
+                            
+                            # 上传成功后清理本地临时文件
+                            cleanup_temp_file(om_file, True)
+                        else:
+                            callback_data.update({
+                                "result": "转换成功，但上传到MinIO失败",
+                                "engine_file": ""
+                            })
+                            logger.error(f"模型转换成功但上传到MinIO失败，任务ID: {request.task_id}")
+                            await send_callback(callback_data)
+                            return
                     except Exception as e:
-                        logger.error(f"上传OM文件到MinIO时出错: {str(e)}")
-                        final_om_file = om_file  # 出错时使用本地路径
-
+                        logger.error(f"上传OM文件到MinIO时出错: {str(e)}", exc_info=True)
                         callback_data.update({
                             "result": "转换失败，结果上传Minio失败",
                             "engine_file": ""
                         })
-                        logger.error(f"模型转换任务执行成功，任务ID: {request.task_id}")
+                        logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                        await send_callback(callback_data)
+                        return
             else:
                 callback_data.update({
                     "result": "转换失败",
                     "engine_file": ""
                 })
                 logger.error(f"模型转换任务执行失败，任务ID: {request.task_id}")
+                await send_callback(callback_data)
+                return
+        else:
+            # engine_file 不为空，直接使用提供的 engine_file
+            engine_file_path = request.engine_file
         
-        # 发送回调
-        await send_callback(callback_data)
+        # 推理任务是必须执行的
+        logger.info(f"开始执行推理任务，任务ID: {request.task_id}")
+        
+        # 初始化推理回调数据（保持engine_file，如果模型转换已设置）
+        inference_callback_data = {
+            "task_id": request.task_id,
+            "model_id": request.model_id,
+            "platform": request.platform or "Huawei",
+            "result": "",
+            "target_file": "",
+            "engine_file": callback_data["engine_file"]
+        }
+        
+        # 定义输出文件路径
+        target_file = f"/tmp/result_{request.task_id}.jpg"
+        
+        # 执行推理
+        result = run_inference(engine_file_path, request.source_file_bucket, target_file, bucket_name=BUCKET_ENGINE)
+        
+        if result:
+            # 将结果上传到MinIO
+            result_object_name = f"result_{request.task_id}.jpg"
+            try:
+                # 上传结果图片到MinIO
+                final_result_file = upload_to_minio_if_needed(target_file, f"{BUCKET_TARGET}/{result_object_name}")
+                if not final_result_file:
+                    inference_callback_data.update({
+                        "result": "上传结果文件到MinIO失败",
+                        "target_file": ""
+                    })
+                else:
+                    # 根据接口文档，result字段应该是状态信息，例如"推理成功"、"推理失败"等
+                    inference_callback_data.update({
+                        "result": "推理成功",
+                        "target_file": result_object_name
+                    })
+                    logger.info(f"推理任务执行成功，任务ID: {request.task_id}")
+                    
+                    # 上传成功后清理本地临时文件
+                    cleanup_temp_file(target_file, True)
+            except Exception as e:
+                logger.error(f"上传结果文件到MinIO时出错: {str(e)}", exc_info=True)
+                inference_callback_data.update({
+                    "result": "上传结果文件到MinIO失败",
+                    "target_file": ""
+                })
+        else:
+            # 推理失败
+            inference_callback_data.update({
+                "result": "推理失败",
+                "target_file": ""
+            })
+            logger.error(f"推理任务执行失败，任务ID: {request.task_id}")
+        
+        # 推理任务完成后，发送回调
+        await send_callback(inference_callback_data)
         
     except Exception as e:
         logger.error(f"任务处理过程中出现异常: {str(e)}", exc_info=True)
@@ -474,9 +529,9 @@ async def predict(request: PredictRequest, background_tasks: BackgroundTasks):
     # 将任务添加到后台执行
     background_tasks.add_task(process_task, request)
     
-    # 立即返回响应
+    # 立即返回响应，根据接口文档返回202表示任务已接收
     return {
-        "code": 200,
+        "code": 202,
         "data": {
             "task_id": str(request.task_id),
             "status": "pending",

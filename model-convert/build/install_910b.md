@@ -182,7 +182,7 @@ sudo cp model-convert/supervisor/supervisord.conf /etc/supervisor/conf.d/
 
 ```bash
 cd model-convert/supervisor/
-sudo cp super.service /etc/systemd/system/supervisord.service
+sudo cp super.service /etc/systemd/system/910b.service
 ```
 
 2. 重新加载systemd配置：
@@ -194,14 +194,14 @@ sudo systemctl daemon-reload
 3. 启用并启动Supervisor服务：
 
 ```bash
-sudo systemctl enable supervisord
-sudo systemctl start supervisord
+sudo systemctl enable 910b
+sudo systemctl start 910b
 ```
 
 4. 检查服务状态：
 
 ```bash
-sudo systemctl status supervisord
+sudo systemctl status 910b
 ```
 
 注意：`super.service`文件中的路径可能需要根据实际部署环境进行调整。默认配置使用`/root/miniconda3/convert/supervisor/supervisord.conf`作为配置文件路径，如果您的部署路径不同，请相应修改该文件中的路径。

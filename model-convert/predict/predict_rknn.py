@@ -281,16 +281,23 @@ class RK3588_Predictor:
             logger.error(f"分类推理过程中出错: {str(e)}", exc_info=True)
             raise RuntimeError(f"分类推理过程中出错: {str(e)}")
     
-    def __del__(self):
+    def release(self):
         """
-        析构函数，释放模型资源
+        显式释放模型资源（推荐使用此方法而不是依赖析构函数）
         """
         if self.rknn is not None:
             try:
                 self.rknn.release()
+                self.rknn = None
                 logger.info("RKNN模型资源已释放")
             except Exception as e:
                 logger.warning(f"释放RKNN模型资源时出错: {str(e)}")
+    
+    def __del__(self):
+        """
+        析构函数，释放模型资源
+        """
+        self.release()
     
     def _calculate_iou(self, box1: List[float], box2: List[float]) -> float:
         """
